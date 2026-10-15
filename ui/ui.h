@@ -220,6 +220,10 @@ void textfield_set(textfield_t *t, const char *s);
 bool textfield_key(textfield_t *t, const input_event_t *ev);
 void textfield_paint(textfield_t *t, gfx_t *g, int x, int y, int w, bool focused);
 
+/* a single shared text clipboard (widgets.c) */
+void clipboard_set(const char *s, int n);
+const char *clipboard_get(void);
+
 /* ---- dialogs (dialog.c) ---------------------------------------------------------- */
 
 void msgbox(window_t *owner, const char *title, const char *text, int icon);

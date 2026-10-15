@@ -243,8 +243,13 @@ static void route_mouse(int kind, int button)
         overlay_mouse(kind, x, y, button);
         return;
     }
-    if (menu_is_open() && menu_mouse(kind, x, y, button))
-        return;
+    if (menu_is_open()) {
+        /* a menu opened from inside a window swallows the release; let the window drop its capture */
+        if (kind == MS_UP && wm_dragging())
+            wm_mouse(kind, x, y, buttons, button);
+        if (menu_mouse(kind, x, y, button))
+            return;
+    }
     if (startmenu_is_open() && startmenu_mouse(kind, x, y, button))
         return;
     if (wm_dragging()) {

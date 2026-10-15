@@ -362,3 +362,17 @@ void textfield_paint(textfield_t *t, gfx_t *g, int x, int y, int w, bool focused
     if (focused && (timer_ms() / 530) % 2 == 0)
         gfx_vline(&inner, 2 - scroll + cx, 1, font_ui.height + 1, HEX(0x000000));
 }
+
+/* ---- clipboard ---------------------------------------------------------------------------------------- */
+
+static char *clip;
+
+void clipboard_set(const char *s, int n)
+{
+    kfree(clip);
+    clip = kmalloc(n + 1);
+    memcpy(clip, s, n);
+    clip[n] = 0;
+}
+
+const char *clipboard_get(void) { return clip ? clip : ""; }
