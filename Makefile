@@ -24,16 +24,18 @@ QEMU_FLAGS := -m 256M -vga std -serial stdio -rtc base=localtime
 all: build/kepler.elf
 
 build/kepler.elf: $(OBJS) linker.ld
-	$(LD) $(LDFLAGS) -o $@ $(OBJS)
+	@$(LD) $(LDFLAGS) -o $@ $(OBJS)
 	@echo "built $@ ($$(du -h $@ | cut -f1))"
 
 build/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+	@echo "  CC  $<"
+	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 build/%.o: %.S
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+	@echo "  CC  $<"
+	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 # .incbin isn't seen by -MMD
 build/assets/assets.o: assets/wallpaper.jpg
