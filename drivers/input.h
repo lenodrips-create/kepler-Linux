@@ -65,4 +65,5 @@ typedef struct {
 void keyboard_init(void);
 void mouse_init(void);
 bool input_poll(input_event_t *ev);
+bool input_pending(void);
 uint8_t keyboard_mods(void);

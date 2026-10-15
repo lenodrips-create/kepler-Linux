@@ -60,6 +60,9 @@ void gfx_vgrad_stops(gfx_t *g, int x, int y, int w, int h, const uint32_t *color
 #define CORNER_BOTTOM 12
 void gfx_round_rect(gfx_t *g, int x, int y, int w, int h, int r, uint32_t c, int corners);
 void gfx_round_rect_vgrad(gfx_t *g, int x, int y, int w, int h, int r, uint32_t top, uint32_t bottom, int corners);
+void gfx_round_rect_stops(gfx_t *g, int x, int y, int w, int h, int r, const uint32_t *colors, const int *stops, int n,
+                          int corners);
+uint32_t gradient_at(const uint32_t *colors, const int *stops, int n, int pos);
 void gfx_round_frame(gfx_t *g, int x, int y, int w, int h, int r, uint32_t c, int corners);
 
 void gfx_circle(gfx_t *g, int cx, int cy, int r, uint32_t c);

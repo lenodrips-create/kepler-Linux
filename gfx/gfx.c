@@ -274,19 +274,8 @@ void gfx_hgrad(gfx_t *g, int x, int y, int w, int h, uint32_t left, uint32_t rig
 /* stops are positions 0..255 along the height, ascending */
 void gfx_vgrad_stops(gfx_t *g, int x, int y, int w, int h, const uint32_t *colors, const int *stops, int n)
 {
-    for (int j = 0; j < h; j++) {
-        int pos = h > 1 ? j * 255 / (h - 1) : 0;
-        uint32_t c = colors[n - 1];
-        for (int k = 0; k < n - 1; k++) {
-            if (pos <= stops[k + 1]) {
-                int span = stops[k + 1] - stops[k];
-                int t = span > 0 ? (pos - stops[k]) * 256 / span : 0;
-                c = color_lerp(colors[k], colors[k + 1], t);
-                break;
-            }
-        }
-        gfx_fill(g, x, y + j, w, 1, c);
-    }
+    for (int j = 0; j < h; j++)
+        gfx_fill(g, x, y + j, w, 1, gradient_at(colors, stops, n, h > 1 ? j * 255 / (h - 1) : 0));
 }
 
 /* ---- antialiased rounded corners ------------------------------------------------- */
@@ -345,14 +334,29 @@ static int round_cov(int i, int j, int w, int h, int r, int corners)
     return m[cj * r + ci];
 }
 
-void gfx_round_rect_vgrad(gfx_t *g, int x, int y, int w, int h, int r, uint32_t top, uint32_t bottom, int corners)
+uint32_t gradient_at(const uint32_t *colors, const int *stops, int n, int pos)
+{
+    if (pos <= stops[0])
+        return colors[0];
+    for (int k = 0; k < n - 1; k++) {
+        if (pos <= stops[k + 1]) {
+            int span = stops[k + 1] - stops[k];
+            int t = span > 0 ? (pos - stops[k]) * 256 / span : 0;
+            return color_lerp(colors[k], colors[k + 1], t);
+        }
+    }
+    return colors[n - 1];
+}
+
+void gfx_round_rect_stops(gfx_t *g, int x, int y, int w, int h, int r, const uint32_t *colors, const int *stops, int n,
+                          int corners)
 {
     if (w <= 0 || h <= 0)
         return;
     r = MIN(r, MIN(w, h) / 2);
     r = MIN(r, MAX_RADIUS);
     for (int j = 0; j < h; j++) {
-        uint32_t c = top == bottom ? top : color_lerp(top, bottom, h > 1 ? j * 256 / (h - 1) : 0);
+        uint32_t c = gradient_at(colors, stops, n, h > 1 ? j * 255 / (h - 1) : 0);
         bool corner_row = j < r || j >= h - r;
         if (!corner_row) {
             gfx_fill(g, x, y + j, w, 1, c);
@@ -364,6 +368,13 @@ void gfx_round_rect_vgrad(gfx_t *g, int x, int y, int w, int h, int r, uint32_t 
         }
         gfx_fill(g, x + r, y + j, w - 2 * r, 1, c);
     }
+}
+
+void gfx_round_rect_vgrad(gfx_t *g, int x, int y, int w, int h, int r, uint32_t top, uint32_t bottom, int corners)
+{
+    const uint32_t colors[2] = { top, bottom };
+    const int stops[2] = { 0, 255 };
+    gfx_round_rect_stops(g, x, y, w, h, r, colors, stops, 2, corners);
 }
 
 void gfx_round_rect(gfx_t *g, int x, int y, int w, int h, int r, uint32_t c, int corners)

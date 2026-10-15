@@ -32,6 +32,8 @@ bool input_poll(input_event_t *ev)
     return any;
 }
 
+bool input_pending(void) { return q_tail != q_head; }
+
 /* ---- 8042 helpers ------------------------------------------------------------ */
 
 static void ps2_wait_write(void)
