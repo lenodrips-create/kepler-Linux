@@ -12,14 +12,10 @@ static window_t *stub(const char *title, int icon)
     return w;
 }
 
-window_t *explorer_open(const char *path) { return stub("My Computer", ICON_COMPUTER); }
 window_t *paint_open(void) { return stub("untitled - Paint", ICON_PAINT); }
 window_t *mines_open(void) { return stub("Minesweeper", ICON_MINES); }
 window_t *taskmgr_open(int tab) { return stub("Task Manager", ICON_TASKMGR); }
-window_t *about_open(void) { return stub("About KeplerOS", ICON_KEPLER); }
 window_t *display_open(void) { return stub("Display Properties", ICON_DISPLAY); }
-window_t *viewer_open(const char *path) { return stub("Picture Viewer", ICON_PICTURES); }
-window_t *sysprops_open(void) { return stub("System Properties", ICON_SYSINFO); }
 
 
 void screens_boot(void (*work)(void (*progress)(int pct)));

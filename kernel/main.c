@@ -82,7 +82,10 @@ void kmain(uint32_t magic, multiboot_info_t *mbi)
     cpu_sti();
 
     cpu_identify(g_sys.cpu_vendor, g_sys.cpu_brand);
-    ksnprintf(line, sizeof line, "CPU: %s", g_sys.cpu_brand);
+    uint64_t tsc0 = rdtsc();
+    sleep_ms(50);
+    g_sys.cpu_mhz = (uint32_t)((rdtsc() - tsc0) / 50000);
+    ksnprintf(line, sizeof line, "CPU: %s, ~%u MHz", g_sys.cpu_brand, g_sys.cpu_mhz);
     ok(line);
 
     datetime_t dt;

@@ -164,6 +164,7 @@ typedef struct {
     int screen_w, screen_h;
     char video[48];
     uint32_t boot_ms;
+    uint32_t cpu_mhz;
 } sysinfo_t;
 
 extern sysinfo_t g_sys;
