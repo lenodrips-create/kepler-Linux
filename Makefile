@@ -38,7 +38,7 @@ build/%.o: %.S
 	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 # .incbin isn't seen by -MMD
-build/assets/assets.o: assets/wallpaper.jpg
+build/assets/assets.o: assets/stockwallpaper
 
 run: build/kepler.elf
 	$(QEMU) -kernel $< $(QEMU_FLAGS)

@@ -5,5 +5,5 @@
 .global wallpaper_jpg
 .global wallpaper_jpg_end
 wallpaper_jpg:
-    .incbin "assets/wallpaper.jpg"
+    .incbin "assets/stockwallpaper"
 wallpaper_jpg_end:
