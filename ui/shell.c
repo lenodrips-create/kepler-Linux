@@ -91,6 +91,7 @@ static void compose(void)
     switch (mode) {
     case MODE_WELCOME:
         screens_welcome_paint(&g, dirty);
+        overlay_paint(&g, dirty);
         break;
     case MODE_DESKTOP:
         desktop_paint(&g, dirty);
@@ -198,6 +199,7 @@ void ui_launch(const char *cmd)
 
 void ui_login(void)
 {
+    ui_set_cursor(CURSOR_ARROW);
     mode = MODE_DESKTOP;
     ui_invalidate_all();
     taskbar_changed();
@@ -233,7 +235,10 @@ static void route_mouse(int kind, int button)
 {
     int x = mx, y = my;
     if (mode == MODE_WELCOME) {
-        screens_welcome_mouse(kind, x, y, button);
+        if (overlay_is_open())
+            overlay_mouse(kind, x, y, button);
+        else
+            screens_welcome_mouse(kind, x, y, button);
         return;
     }
     if (tip_text[0] && (kind != MS_MOVE || !rect_contains(rect_make(tip_rect.x - 40, tip_rect.y - 40, tip_rect.w + 80, tip_rect.h + 80), x, y)))
@@ -377,7 +382,10 @@ static void handle_key(const input_event_t *ev)
         return;
     }
     if (mode == MODE_WELCOME) {
-        screens_welcome_key(ev);
+        if (overlay_is_open())
+            overlay_key(ev);
+        else
+            screens_welcome_key(ev);
         return;
     }
     if (overlay_is_open()) {
@@ -459,6 +467,7 @@ void desktop_main(multiboot_info_t *mbi)
                 overlay_tick();
             } else if (mode == MODE_WELCOME) {
                 screens_welcome_tick();
+                overlay_tick();
             }
             wm_tick();
             beep_update();
