@@ -3,19 +3,6 @@
 #include "apps.h"
 #include "ui.h"
 
-static const window_ops_t stub_ops = { 0 };
-
-static window_t *stub(const char *title, int icon)
-{
-    window_t *w = wm_create(title, icon, 420, 300, &stub_ops, NULL, WF_RESIZABLE);
-    w->bg = HEX(0xFFFFFF);
-    return w;
-}
-
-window_t *taskmgr_open(int tab) { return stub("Task Manager", ICON_TASKMGR); }
-window_t *display_open(void) { return stub("Display Properties", ICON_DISPLAY); }
-
-
 void screens_boot(void (*work)(void (*progress)(int pct)));
 static void no_progress(int pct) {}
 void screens_boot(void (*work)(void (*progress)(int pct))) { work(no_progress); }

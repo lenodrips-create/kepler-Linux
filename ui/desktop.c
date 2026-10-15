@@ -60,7 +60,8 @@ static void make_night(image_t *img)
     g.argb = false;
     gfx_vgrad(&g, 0, 0, img->w, img->h, HEX(0x040A1F), HEX(0x1B3277));
     uint32_t seed = 0x1234567;
-    for (int i = 0; i < 900; i++) {
+    int stars = img->w * img->h / 1100;
+    for (int i = 0; i < stars; i++) {
         seed = seed * 1103515245 + 12345;
         int x = (seed >> 8) % img->w;
         seed = seed * 1103515245 + 12345;
@@ -68,7 +69,7 @@ static void make_night(image_t *img)
         seed = seed * 1103515245 + 12345;
         int a = 60 + (seed >> 16) % 196;
         gfx_pixel(&g, x, y, RGBA(255, 255, 255, a));
-        if (a > 235) {
+        if (a > 235 && img->w > 400) {
             gfx_pixel(&g, x + 1, y, RGBA(200, 220, 255, a / 3));
             gfx_pixel(&g, x - 1, y, RGBA(200, 220, 255, a / 3));
             gfx_pixel(&g, x, y + 1, RGBA(200, 220, 255, a / 3));
@@ -78,46 +79,55 @@ static void make_night(image_t *img)
     /* a big planet rising at the bottom */
     int r = img->w;
     int cx = img->w / 2, cy = img->h + r - img->h / 5;
+    int glow = MAX(4, img->w / 32);
     for (int y = img->h / 2; y < img->h; y++)
         for (int x = 0; x < img->w; x++) {
             int64_t dx = x - cx, dy = y - cy;
             int64_t d2 = dx * dx + dy * dy;
             int64_t rr = (int64_t)r * r;
             if (d2 <= rr) {
-                int depth = (int)((rr - d2) / (2 * r)); /* ~ distance inside the rim */
+                int depth = (int)((rr - d2) / (2 * r)) * 1280 / img->w;
                 uint32_t c = color_lerp(HEX(0x58C4FF), HEX(0x0B2A6B), MIN(256, depth * 3));
                 img->px[y * img->w + x] = c;
-            } else if (d2 <= (int64_t)(r + 40) * (r + 40)) {
-                int out = (int)((d2 - rr) / (2 * r));
+            } else if (d2 <= (int64_t)(r + glow) * (r + glow)) {
+                int out = (int)((d2 - rr) / (2 * r)) * 40 / glow;
                 int a = MAX(0, 120 - out * 3);
                 img->px[y * img->w + x] = color_lerp(img->px[y * img->w + x], HEX(0x7FD8FF), a);
             }
         }
 }
 
+image_t *desktop_render_background(int style, uint32_t color, int w, int h)
+{
+    image_t *img;
+    if (style == 0) {
+        if (w == wall_src->w && h == wall_src->h) {
+            img = image_new(w, h);
+            memcpy(img->px, wall_src->px, (size_t)w * h * 4);
+        } else {
+            img = image_resize(wall_src, w, h);
+        }
+        return img;
+    }
+    img = image_new(w, h);
+    if (style == 1) {
+        make_night(img);
+    } else if (style == 2) {
+        gfx_t g = gfx_for_image(img);
+        g.argb = false;
+        gfx_vgrad(&g, 0, 0, w, h, HEX(0x6FA8F0), HEX(0x173F96));
+    } else {
+        memset32(img->px, color | 0xFF000000u, (size_t)w * h);
+    }
+    return img;
+}
+
 void desktop_set_background(int style, uint32_t color)
 {
     bg_style = style;
     bg_color = color;
-    if (!bg)
-        bg = image_new(g_screen.w, g_screen.h);
-    switch (style) {
-    case 0:
-        memcpy(bg->px, wall_src->px, (size_t)bg->w * bg->h * 4);
-        break;
-    case 1:
-        make_night(bg);
-        break;
-    case 2: {
-        gfx_t g = gfx_for_image(bg);
-        g.argb = false;
-        gfx_vgrad(&g, 0, 0, bg->w, bg->h, HEX(0x6FA8F0), HEX(0x173F96));
-        break;
-    }
-    default:
-        memset32(bg->px, color | 0xFF000000u, (size_t)bg->w * bg->h);
-        break;
-    }
+    image_free(bg);
+    bg = desktop_render_background(style, color, g_screen.w, g_screen.h);
     ui_invalidate_all();
 }
 

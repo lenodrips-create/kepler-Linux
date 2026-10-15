@@ -240,6 +240,7 @@ void desktop_key(const input_event_t *ev);
 const image_t *desktop_wallpaper(void);
 image_t *desktop_wallpaper_source(void);
 void desktop_set_background(int style, uint32_t color);
+image_t *desktop_render_background(int style, uint32_t color, int w, int h);
 int desktop_background_style(void);
 uint32_t desktop_background_color(void);
 void desktop_refresh_icons(void);
