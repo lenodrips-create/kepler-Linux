@@ -12,8 +12,6 @@ static window_t *stub(const char *title, int icon)
     return w;
 }
 
-window_t *paint_open(void) { return stub("untitled - Paint", ICON_PAINT); }
-window_t *mines_open(void) { return stub("Minesweeper", ICON_MINES); }
 window_t *taskmgr_open(int tab) { return stub("Task Manager", ICON_TASKMGR); }
 window_t *display_open(void) { return stub("Display Properties", ICON_DISPLAY); }
 
