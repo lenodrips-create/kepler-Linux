@@ -86,7 +86,7 @@ window_t *about_open(void)
         return w;
     }
     about_t *a = kzalloc(sizeof *a);
-    int cw = 430, ch = 336;
+    int cw = 430, ch = 306;
     a->items[0] = (button_t){ cw - 97, ch - 37, 75, 23, "OK", 1, BTN_DEFAULT };
     a->btns = (buttons_t){ a->items, 1, -1, -1 };
     w = wm_create("About KeplerOS", ICON_KEPLER, cw, ch, &about_ops, a, WF_DIALOG);
