@@ -12,7 +12,6 @@ static window_t *stub(const char *title, int icon)
     return w;
 }
 
-window_t *terminal_open(void) { return stub("Command Prompt", ICON_CMD); }
 window_t *explorer_open(const char *path) { return stub("My Computer", ICON_COMPUTER); }
 window_t *paint_open(void) { return stub("untitled - Paint", ICON_PAINT); }
 window_t *mines_open(void) { return stub("Minesweeper", ICON_MINES); }
