@@ -210,6 +210,7 @@ def main():
     ap.add_argument('--kernel', default='build/kepler.elf')
     ap.add_argument('--outdir', default='shots')
     ap.add_argument('--mem', default='256M')
+    ap.add_argument('--iso', help='boot this CD image instead of the kernel')
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -217,7 +218,7 @@ def main():
     sock = os.path.join(tmp, 'qmp.sock')
     log = os.path.join(tmp, 'serial.log')
     proc = subprocess.Popen([
-        'qemu-system-i386', '-kernel', args.kernel, '-m', args.mem, '-vga', 'std',
+        'qemu-system-i386', *(['-cdrom', args.iso] if args.iso else ['-kernel', args.kernel]), '-m', args.mem, '-vga', 'std',
         '-display', 'none', '-serial', f'file:{log}', '-qmp', f'unix:{sock},server,nowait',
         '-rtc', 'base=localtime', '-no-reboot',
     ])
