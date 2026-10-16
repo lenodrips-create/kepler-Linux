@@ -1,0 +1,20 @@
+# KeplerOS boot splash: the Kepler planet, breathing slowly, over the name.
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+
+logo.image = Image("logo.png");
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetX(Window.GetWidth() / 2 - logo.image.GetWidth() / 2);
+logo.sprite.SetY(Window.GetHeight() / 2 - logo.image.GetHeight() / 2 - 40);
+
+name.image = Image.Text("K E P L E R O S", 0.92, 0.92, 1, 1, "Sans 15");
+name.sprite = Sprite(name.image);
+name.sprite.SetX(Window.GetWidth() / 2 - name.image.GetWidth() / 2);
+name.sprite.SetY(Window.GetHeight() / 2 + logo.image.GetHeight() / 2 - 10);
+
+t = 0;
+fun refresh() {
+    t++;
+    logo.sprite.SetOpacity(0.7 + 0.3 * Math.Sin(t / 30));
+}
+Plymouth.SetRefreshFunction(refresh);

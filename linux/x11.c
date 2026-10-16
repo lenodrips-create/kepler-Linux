@@ -25,6 +25,7 @@
 #include <X11/extensions/Xfixes.h>
 #include <X11/extensions/shape.h>
 #include <X11/keysym.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -973,6 +974,13 @@ void host_launch(const char *program, const char *arg)
     if (pid != 0)
         return;
     setsid();
+    /* programs' messages go to a log rather than the shell's */
+    int log = open("/tmp/kepler-apps.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (log >= 0) {
+        dup2(log, 1);
+        dup2(log, 2);
+        close(log);
+    }
     char path[64];
     ksnprintf(path, sizeof path, "%s", program);
     if (arg && *arg)

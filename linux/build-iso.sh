@@ -33,6 +33,24 @@ chroot "$ROOT" systemctl mask casper-md5check.service >/dev/null 2>&1 || true
 rm -f "$ROOT"/etc/update-motd.d/* 2>/dev/null || true
 touch "$ROOT/home/kepler/.hushlogin"
 
+# the boot splash: the Kepler planet on black
+install -D -m644 -t "$ROOT/usr/share/plymouth/themes/kepleros" \
+    "$HERE/linux/plymouth/kepleros.plymouth" "$HERE/linux/plymouth/kepleros.script" "$HERE/linux/plymouth/logo.png"
+T=/usr/share/plymouth/themes
+chroot "$ROOT" update-alternatives --quiet --install $T/default.plymouth default.plymouth $T/kepleros/kepleros.plymouth 300
+chroot "$ROOT" update-alternatives --quiet --set default.plymouth $T/kepleros/kepleros.plymouth
+
+# Ubuntu-desktop steps of the live boot that KeplerOS doesn't use (and that print errors)
+for s in 15autologin 19keyboard 20xconfig 22desktop_settings 25adduser 30accessibility 31disable_update_notifier \
+         33enable_apport_crashes 34disable_kde_services 37disable_screensaver_lubuntu 40install_driver_updates \
+         41apt_cdrom 44pk_allow_ubuntu 45jackd2 52gnome_initial_setup 53disable_unattended_upgrades \
+         55disable_snap_refresh 56override_nvidia_udev_rule 57pollinate 59disable_mozc_autosetup \
+         60_create_intaller_logdir 61desktop_canary_tweaks; do
+    rm -f "$ROOT/usr/share/initramfs-tools/scripts/casper-bottom/$s"
+done
+sed -i '/casper-bottom\/\(15autologin\|19keyboard\|20xconfig\|22desktop_settings\|25adduser\|30accessibility\|31disable_update_notifier\|33enable_apport_crashes\|34disable_kde_services\|37disable_screensaver_lubuntu\|40install_driver_updates\|41apt_cdrom\|44pk_allow_ubuntu\|45jackd2\|52gnome_initial_setup\|53disable_unattended_upgrades\|55disable_snap_refresh\|56override_nvidia_udev_rule\|57pollinate\|59disable_mozc_autosetup\|60_create_intaller_logdir\|61desktop_canary_tweaks\)/d' \
+    "$ROOT/usr/share/initramfs-tools/scripts/casper-bottom/ORDER" 2>/dev/null || true
+
 # ---- boot files ---------------------------------------------------------------------------
 for m in proc sys dev; do mountpoint -q "$ROOT/$m" || mount --bind "/$m" "$ROOT/$m"; done
 chroot "$ROOT" update-initramfs -u >/dev/null
@@ -44,7 +62,7 @@ cp -L "$ROOT/boot/vmlinuz" "$ISO/casper/vmlinuz"
 cp -L "$ROOT/boot/initrd.img" "$ISO/casper/initrd"
 echo "KeplerOS live" > "$ISO/.disk/info"
 
-mksquashfs "$ROOT" "$ISO/casper/filesystem.squashfs" -comp xz -b 1M -noappend -no-progress \
+mksquashfs "$ROOT" "$ISO/casper/filesystem.squashfs" -comp xz -b 1M -noappend -no-progress -processors 2 \
     -wildcards -e 'boot/*' 'proc/*' 'sys/*' 'dev/*' 'run/*' 'tmp/*' 'var/cache/apt/*' 'var/log/*' \
     'home/kepler/.cache' 'home/kepler/.local' 'home/kepler/.config' 'home/kepler/.pki' 'etc/resolv.conf.test' 
 printf '%s' "$(du -sxb "$ROOT" | cut -f1)" > "$ISO/casper/filesystem.size"

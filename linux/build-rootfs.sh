@@ -61,7 +61,7 @@ chroot_run apt-get update
 RUNTIME=(
     # boot
     linux-image-generic casper initramfs-tools systemd systemd-sysv systemd-resolved udev dbus dbus-user-session
-    kmod sudo ca-certificates iproute2 locales tzdata
+    kmod sudo ca-certificates iproute2 locales tzdata plymouth
     # graphics
     xserver-xorg-core xserver-xorg-video-fbdev xserver-xorg-video-vesa xserver-xorg-video-vmware
     xserver-xorg-video-qxl xserver-xorg-video-amdgpu xserver-xorg-video-intel xserver-xorg-input-libinput
