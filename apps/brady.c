@@ -105,7 +105,7 @@ static const lesson_t lessons[] = {
         { "mkdir test && cd test", "Makes a folder, then goes into it if that worked." },
         { "cat /etc/passwd | sort | head -n 5", "Sorts a file and shows the first 5 lines." } },
       "Count the files in /usr/bin with ls /usr/bin | wc -l. There are a lot!" },
-    { "Superpowers: sudo and apt",
+    { "sudo and apt",
       "sudo is like asking the computer politely to let you do grown-up stuff. With great power...",
       "sudo runs a command as the administrator (called root). apt is Ubuntu's app store for the "
       "terminal: it installs and removes programs. On KeplerOS, sudo doesn't ask for a password. On the "
@@ -377,12 +377,12 @@ static void paint_sidebar(brady_t *b, gfx_t *g, int ch)
     }
 }
 
-static void paint_bubble(brady_t *b, gfx_t *g, int cw)
+static void paint_bubble(brady_t *b, gfx_t *g, int cw, int ch)
 {
     const char *s = brady_line(b);
     int tw = BUBBLE_W - 28;
     int th = gfx_text_wrapped(NULL, &font_ui, 0, 0, tw, s, 0, 18);
-    int bx = cw - BUBBLE_W - 16, by = 18, bh = th + 26;
+    int bh = th + 40, bx = cw - BUBBLE_W - 16, by = MAX(18, ch - BRADY_H - 8 - bh - 4);
     gfx_shadow(g, bx, by, BUBBLE_W, bh, 14, 10, 3, 40);
     gfx_round_rect(g, bx, by, BUBBLE_W, bh, 14, HEX(0xFFFFFF), CORNER_ALL);
     gfx_round_frame(g, bx, by, BUBBLE_W, bh, 14, HEX(0xD9CCFF), CORNER_ALL);
@@ -391,7 +391,7 @@ static void paint_bubble(brady_t *b, gfx_t *g, int cw)
     for (int i = 0; i < 14; i++)
         gfx_hline(g, tx - 12 + i, by + bh - 1 + i, MAX(1, 14 - i), HEX(0xFFFFFF));
     gfx_text(g, &font_ui_bold, bx + 14, by + 10, "Brady", C_PURPLE);
-    gfx_text_wrapped(g, &font_ui, bx + 14, by + 28 - 4, tw, s, C_INK, 18);
+    gfx_text_wrapped(g, &font_ui, bx + 14, by + 30, tw, s, C_INK, 18);
 }
 
 /* a command on a card: the command in terminal colours, what it does underneath */
@@ -574,7 +574,7 @@ static void br_paint(window_t *w, gfx_t *g, int cw, int ch)
     pill_button(b, g, cx + cwid - 150, by, 150, "Open Terminal", HIT_TERMINAL, true);
 
     /* Brady and what he says */
-    paint_bubble(b, g, cw);
+    paint_bubble(b, g, cw, ch);
     gfx_blit_alpha(g, cw - BRADY_W - 6, ch - BRADY_H - 8, &brady_img, 255);
 }
 
