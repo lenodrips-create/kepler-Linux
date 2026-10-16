@@ -28,4 +28,15 @@ if systemd-detect-virt -q; then
 fi
 export QT_QPA_PLATFORM=xcb
 
+# booted with "kepdebug": mirror the session's and the programs' logs to the serial port
+if grep -qw kepdebug /proc/cmdline && [ -w /dev/ttyS0 ]; then
+    touch /tmp/kepler-apps.log
+    { echo "kepdebug: session for $(id -un), virt=$(systemd-detect-virt), $(xrandr | grep '\*' | head -1)"; \
+      echo "kepdebug: userns_restrict=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>&1)"; \
+      unshare -Ur true && echo "kepdebug: user namespaces work"; \
+      tail -n +1 -F /tmp/kepler-apps.log; } > /dev/ttyS0 2>&1 &
+    /usr/lib/kepleros/kepler-shell 2>&1 | tee /dev/ttyS0
+    exit
+fi
+
 exec /usr/lib/kepleros/kepler-shell

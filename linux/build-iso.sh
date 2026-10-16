@@ -17,6 +17,7 @@ make -C "$HERE" linux
 # ---- the shell and the session it runs in --------------------------------------------------
 install -D -m755 "$HERE/build/linux/kepler-shell" "$ROOT/usr/lib/kepleros/kepler-shell"
 install -D -m755 "$HERE/linux/session.sh" "$ROOT/usr/lib/kepleros/session"
+install -D -m755 "$HERE/linux/kepler-launch.sh" "$ROOT/usr/local/bin/Kepler"   # found before /usr/bin/Kepler
 cat > "$ROOT/home/kepler/.bash_profile" <<'EOF'
 if [ -z "$DISPLAY" ] && [ "$(tty)" = /dev/tty1 ]; then
     exec startx /usr/lib/kepleros/session -- -nolisten tcp -keeptty vt1 >/tmp/xsession.log 2>&1
@@ -32,6 +33,7 @@ chroot "$ROOT" systemctl mask casper-md5check.service >/dev/null 2>&1 || true
 : > "$ROOT/etc/motd"
 rm -f "$ROOT"/etc/update-motd.d/* 2>/dev/null || true
 touch "$ROOT/home/kepler/.hushlogin"
+chroot "$ROOT" usermod -aG dialout kepler   # lets "kepdebug" boots log to the serial port
 
 # the boot splash: the Kepler planet on black
 install -D -m644 -t "$ROOT/usr/share/plymouth/themes/kepleros" \
