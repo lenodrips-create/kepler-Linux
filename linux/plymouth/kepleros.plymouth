@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=KeplerOS
+Description=The Kepler planet on black while KeplerOS starts
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/kepleros
+ScriptFile=/usr/share/plymouth/themes/kepleros/kepleros.script

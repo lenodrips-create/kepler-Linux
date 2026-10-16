@@ -13,3 +13,4 @@ window_t *about_open(void);
 window_t *display_open(void);
 window_t *viewer_open(const char *path);
 window_t *sysprops_open(void);
+window_t *browser_open(const char *url); /* NULL for the start page */

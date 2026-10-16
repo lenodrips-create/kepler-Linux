@@ -51,6 +51,13 @@ uint32_t pci_read(uint8_t bus, uint8_t slot, uint8_t func, uint8_t off)
     return inl(0xCFC);
 }
 
+void pci_write(uint8_t bus, uint8_t slot, uint8_t func, uint8_t off, uint32_t value)
+{
+    uint32_t addr = (1u << 31) | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) | ((uint32_t)func << 8) | (off & 0xFC);
+    outl(0xCF8, addr);
+    outl(0xCFC, value);
+}
+
 bool pci_find(uint16_t vendor, uint16_t device, uint8_t *bus, uint8_t *slot, uint8_t *func)
 {
     for (int b = 0; b < 256; b++)

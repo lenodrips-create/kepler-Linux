@@ -22,7 +22,7 @@
 #define COL_MENU_HI   HEX(0x2A6CF0)
 #define COL_SEP       HEX(0xD9D9D9)
 
-#define TOPBAR_H      24 /* the global menu bar */
+#define TOPBAR_H      0 /* the global menu bar is gone for now: menus are in the windows, the clock in the dock */
 #define DOCK_RESERVE  78 /* kept free above the bottom edge for the dock */
 #define TITLE_H       28
 #define FRAME         0
@@ -49,6 +49,23 @@ const image_t *ui_vibrancy(void);
 void ui_tooltip(const char *text, int x, int y);
 bool ui_overlay_active(void);
 void ui_beep(int hz, int ms);
+/* the desktop and its windows are on screen (not the sign-in screen, Launchpad or an alert) */
+bool ui_desktop_shown(void);
+/* the shell, not another program's window, should get the keyboard */
+bool ui_wants_keyboard(void);
+
+#ifdef KEPLER_HOSTED
+/* Running on Linux under X (linux/x11.c): other programs' windows live in the
+ * window manager next to the shell's own. */
+void host_pump(void);                        /* X events in: input, windows coming and going */
+void host_sync(void);                        /* after drawing: window placement, focus, input routing */
+void host_wait(int ms);                      /* sleep until X has news or ms pass */
+void host_set_cursor(int cursor);
+void host_paint_popups(gfx_t *g, rect_t dirty); /* other programs' menus and tooltips */
+void host_beep(void);
+void host_launch(const char *program, const char *arg); /* start an installed program, e.g. Kepler */
+void shell_main(void);
+#endif
 
 /* ---- window manager (wm.c) ----------------------------------------------------- */
 
@@ -66,6 +83,8 @@ typedef struct {
     void (*resized)(window_t *w);
     /* WF_UNIFIED windows: is (x, y) a control in the title/toolbar area? Elsewhere there drags the window */
     bool (*caption_hit)(window_t *w, int x, int y);
+    /* windows owned by another program: asked to close, they go away later by themselves */
+    void (*close_request)(window_t *w);
 } window_ops_t;
 
 #define WF_RESIZABLE  0x01
@@ -76,6 +95,7 @@ typedef struct {
 #define WF_NO_MAX     0x20
 #define WF_UNIFIED    0x40 /* the client covers the title bar; the app draws its own toolbar there */
 #define WF_ALERT      0x80 /* WF_UNIFIED without traffic lights: alerts, moved by their background */
+#define WF_FULLSCREEN 0x100 /* covers the whole screen, no frame */
 
 struct window {
     int id;
@@ -101,6 +121,7 @@ struct window {
     void *menu_ctx;
     int caption_h;  /* WF_UNIFIED: height of the app's toolbar */
     image_t *thumb; /* snapshot shown in the dock while minimised */
+    bool closing;   /* close_request windows: really closing now */
 };
 
 window_t *wm_create(const char *title, int icon, int cw, int ch, const window_ops_t *ops, void *data, uint32_t flags);
@@ -133,6 +154,9 @@ void wm_hide_app(const char *app);
 int wm_count(void);
 bool wm_alive(window_t *w);
 void wm_minimize_all(void);
+void wm_set_fullscreen(window_t *w, bool on);
+/* the window covering the screen, if the active one does */
+window_t *wm_fullscreen(void);
 void wm_cycle(void);
 
 /* shell hooks */
@@ -299,6 +323,8 @@ void topbar_changed(void);
 /* true when the menu bar text should be white (dark wallpaper) */
 bool topbar_dark(void);
 void topbar_background_changed(void);
+/* the KeplerOS menu: About, System Preferences, Sleep, Restart, Shut Down, Lock, Log Out */
+void kepler_menu_open(int x, int y);
 
 /* the dock (dock.c) */
 rect_t dock_rect(void);
