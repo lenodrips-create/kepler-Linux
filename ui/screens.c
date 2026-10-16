@@ -83,7 +83,6 @@ typedef struct {
 
 static const account_t accounts[] = {
     { "Kepler", "kepler", "Password hint: kepler" },
-    { "Guest", NULL, NULL },
 };
 #define N_ACCOUNTS ((int)ARRAY_LEN(accounts))
 
@@ -105,9 +104,8 @@ static int last_minute = -1;
 
 static const image_t *avatar(int i, int size)
 {
-    if (i == 0)
-        return icon_user_picture(size);
-    return icon_get(ICON_GUEST, size);
+    (void)i;
+    return icon_user_picture(size);
 }
 
 static int users_y(void) { return g_screen.h - 340; }
@@ -168,7 +166,6 @@ static void paint_avatar(gfx_t *g, int i, int cx, int y, int size, bool ring)
 {
     if (ring)
         gfx_circle(g, cx, y + size / 2, size / 2 + 4, RGBA(255, 255, 255, 90));
-    gfx_circle(g, cx, y + size / 2 + 2, size / 2, RGBA(0, 0, 0, 40));
     gfx_blit_alpha(g, cx - size / 2, y, avatar(i, size), 255);
 }
 

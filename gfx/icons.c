@@ -1503,20 +1503,16 @@ void icons_prerender(void (*progress)(int done, int total))
 /* ---- user picture ---------------------------------------------------------------- */
 
 static image_t *user_pic[N_SIZES];
-static image_t *user_src;
+static const image_t *user_src;
+
+extern const uint32_t user_picture_argb[];
 
 void icons_set_user_picture(const image_t *wall)
 {
-    /* the ladybug flying in the middle of the wallpaper (1920x1200 picture, cropped to the screen) */
-    int cx = wall->w / 2 - wall->h * 25 / 1200, cy = wall->h * 495 / 1200, r = wall->h * 105 / 1200;
-    int side = 2 * r;
-    image_free(user_src);
-    user_src = image_new(side, side);
-    for (int y = 0; y < side; y++)
-        for (int x = 0; x < side; x++) {
-            int sx = CLAMP(cx - r + x, 0, wall->w - 1), sy = CLAMP(cy - r + y, 0, wall->h - 1);
-            user_src->px[y * side + x] = wall->px[sy * wall->w + sx];
-        }
+    /* the account picture: the two Messenger buddies, 256x256 with transparency */
+    (void)wall;
+    static image_t pic = { (uint32_t *)user_picture_argb, 256, 256 };
+    user_src = &pic;
 }
 
 const image_t *icon_user_picture(int size)
@@ -1524,17 +1520,8 @@ const image_t *icon_user_picture(int size)
     int slot = size_slot(size);
     if (slot < 0)
         slot = 7;
-    if (!user_pic[slot] && user_src) {
-        int s = sizes[slot];
-        image_t *img = image_resize(user_src, s, s);
-        image_t *mask = image_new(s, s);
-        gfx_t mg = gfx_for_image(mask);
-        gfx_circle(&mg, s / 2, s / 2, s / 2, HEX(0xFFFFFF));
-        for (int i = 0; i < s * s; i++)
-            img->px[i] = (img->px[i] & 0xFFFFFF) | (mask->px[i] & 0xFF000000u);
-        image_free(mask);
-        user_pic[slot] = img;
-    }
+    if (!user_pic[slot] && user_src)
+        user_pic[slot] = resize_alpha(user_src, sizes[slot], sizes[slot]);
     return user_pic[slot];
 }
 

@@ -50,6 +50,10 @@ welcome_bg_argb:
 welcome_icons_a8:
     .incbin "assets/welcome-icons.a8"
 .balign 16
+.global user_picture_argb
+user_picture_argb:
+    .incbin "assets/user-picture.bgra"
+.balign 16
 .global notepad_icon_argb
 notepad_icon_argb:
     .incbin "assets/notepad-icon.bgra"
