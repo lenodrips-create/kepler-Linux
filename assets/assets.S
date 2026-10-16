@@ -50,5 +50,13 @@ activity_icon_argb:
 .global settings_icon_argb
 settings_icon_argb:
     .incbin "assets/settings-icon.bgra"
+.balign 16
+.global launchpad_icon_argb
+launchpad_icon_argb:
+    .incbin "assets/launchpad-icon.bgra"
+.balign 16
+.global trash_icon_argb
+trash_icon_argb:
+    .incbin "assets/trash-icon.bgra"
 
 .section .note.GNU-stack,"",@progbits
