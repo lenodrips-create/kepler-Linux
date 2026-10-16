@@ -223,13 +223,14 @@ window_t *viewer_open(const char *path)
     if (f && !f->dir && !jpeg_decode(f->data, f->size, &v->src))
         v->src = NULL;
     char title[128];
-    ksnprintf(title, sizeof title, "%s - Kepler Picture Viewer", f ? f->name : path);
+    ksnprintf(title, sizeof title, "%s", f ? f->name : path);
     int cw = 640, ch = 470;
     if (v->src) {
         cw = CLAMP(v->src->w + 60, 480, 1000);
         ch = CLAMP(v->src->h + BAR_H + 60, 360, 640);
     }
     window_t *w = wm_create(title, ICON_PICTURES, cw, ch, &v_ops, v, WF_RESIZABLE);
+    wm_set_app(w, "Preview", NULL, NULL, NULL);
     w->bg = HEX(0xFFFFFF);
     w->min_w = 420;
     w->min_h = 260;

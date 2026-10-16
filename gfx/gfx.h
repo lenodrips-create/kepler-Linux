@@ -64,6 +64,8 @@ void gfx_round_rect_stops(gfx_t *g, int x, int y, int w, int h, int r, const uin
                           int corners);
 uint32_t gradient_at(const uint32_t *colors, const int *stops, int n, int pos);
 void gfx_round_frame(gfx_t *g, int x, int y, int w, int h, int r, uint32_t c, int corners);
+/* coverage (0..255) of pixel (i, j) inside a w x h rounded rect */
+int gfx_round_coverage(int i, int j, int w, int h, int r, int corners);
 
 void gfx_circle(gfx_t *g, int cx, int cy, int r, uint32_t c);
 
@@ -71,10 +73,29 @@ void gfx_blit(gfx_t *g, int x, int y, const image_t *img);
 void gfx_blit_alpha(gfx_t *g, int x, int y, const image_t *img, int opacity);
 void gfx_blit_region(gfx_t *g, int x, int y, const image_t *img, int sx, int sy, int w, int h);
 void gfx_blit_scaled(gfx_t *g, int x, int y, int w, int h, const image_t *img);
+/* paints c through the alpha channel of img (monochrome glyphs) */
+void gfx_blit_tint(gfx_t *g, int x, int y, const image_t *img, uint32_t c);
 void gfx_tint(gfx_t *g, int x, int y, int w, int h, uint32_t c, int a);
 void gfx_desaturate(gfx_t *g, int x, int y, int w, int h, int amount, int darken);
+
+/* soft drop shadow of a rounded rect, spreading `blur` px and shifted down by dy;
+ * pixels under the rect itself are left alone */
+void gfx_shadow(gfx_t *g, int x, int y, int w, int h, int r, int blur, int dy, int alpha);
+
+/* Translucent "vibrancy" surfaces. gfx_backdrop fills a rounded rect with the
+ * pixels of a screen-sized image (a pre-blurred wallpaper) at the same screen
+ * position, washed with tint. gfx_blur_behind blurs what is already drawn in
+ * the target under the rect instead, so it needs everything beneath to be
+ * painted first. */
+void gfx_backdrop(gfx_t *g, int x, int y, int w, int h, int r, const image_t *src, uint32_t tint, int corners);
+void gfx_blur_behind(gfx_t *g, int x, int y, int w, int h, int r, int radius, uint32_t tint, int corners);
 
 /* image processing used for the wallpaper */
 image_t *image_resize(const image_t *src, int w, int h);
 image_t *image_cover(const image_t *src, int w, int h);
 void image_sharpen(image_t *img, int amount);
+void image_box_blur(uint32_t *px, int w, int h, int stride, int r, int passes);
+/* a soft, slightly more saturated copy for vibrancy (sat in 1/256ths) */
+image_t *image_blurred(const image_t *src, int radius, int sat);
+/* average luminance 0..255 of a region */
+int image_luma(const image_t *img, int x, int y, int w, int h);

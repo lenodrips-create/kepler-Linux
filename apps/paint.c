@@ -502,11 +502,12 @@ window_t *paint_open(void)
     p->mb.entries = bar;
     p->mb.n = ARRAY_LEN(bar);
     p->mb.open = p->mb.hover = -1;
-    window_t *w = wm_create("untitled - Paint", ICON_PAINT, CANVAS_X + 4 + 560 + 16, CANVAS_Y + 4 + 360 + 14 + PALETTE_H + STATUS_H,
+    window_t *w = wm_create("Untitled", ICON_PAINT, CANVAS_X + 4 + 560 + 16, CANVAS_Y + 4 + 360 + 14 + PALETTE_H + STATUS_H,
                             &pt_ops, p, WF_RESIZABLE);
     w->bg = COL_FACE;
     w->min_w = 400;
     w->min_h = 300;
+    wm_set_app(w, "Paint", &p->mb, command, w);
     wm_set_tick(w, 40);
     return w;
 }

@@ -1,25 +1,55 @@
-/* Message boxes, a text prompt and the Run dialog. */
+/* Alerts and a text prompt, laid out like Big Sur alerts: icon on top, a bold
+ * message, smaller details and full-width buttons. Run now opens Spotlight. */
 
-#include "ramfs.h"
 #include "ui.h"
 
-enum { DLG_MSG, DLG_PROMPT, DLG_RUN };
-enum { BTN_OK = 1, BTN_CANCEL, BTN_BROWSE };
+enum { DLG_MSG, DLG_PROMPT };
+enum { BTN_OK = 1, BTN_CANCEL };
+
+#define AL_W  280
+#define PAD   20
+#define ICON  64
 
 typedef struct {
     int kind;
+    char title[128];
     char text[512];
-    char label[96];
     int icon;
     textfield_t field;
-    button_t items[3];
+    button_t items[2];
     buttons_t btns;
     prompt_cb cb;
     void *ctx;
-    int text_h;
+    int title_h, text_h;
 } dlg_t;
 
-#define TEXT_W 340
+/* centred, word-wrapped text; with g NULL it only measures */
+static int wrap_centered(gfx_t *g, const font_t *f, int x, int y, int w, const char *s, uint32_t c, int lh)
+{
+    int top = y;
+    while (*s) {
+        int n = 0, last_space = -1, lw = 0;
+        while (s[n] && s[n] != '\n') {
+            int cw = char_width(f, s[n]);
+            if (lw + cw > w && n > 0)
+                break;
+            if (s[n] == ' ')
+                last_space = n;
+            lw += cw;
+            n++;
+        }
+        int take = (s[n] && s[n] != '\n' && last_space > 0) ? last_space : n;
+        if (g)
+            gfx_text_n(g, f, x + (w - text_width_n(f, s, take)) / 2, y, s, take, c);
+        y += lh;
+        s += take;
+        while (*s == ' ')
+            s++;
+        if (*s == '\n')
+            s++;
+    }
+    return y - top;
+}
 
 static void finish(window_t *w, bool ok)
 {
@@ -28,45 +58,24 @@ static void finish(window_t *w, bool ok)
     void *ctx = d->ctx;
     char value[128];
     strlcpy(value, d->field.text, sizeof value);
-    int kind = d->kind;
     d->cb = NULL;
     wm_close(w);
-    if (kind == DLG_RUN && ok && value[0]) {
-        /* a path opens the file, anything else is a program name */
-        fnode_t *f = value[0] == '/' ? fs_lookup(value) : NULL;
-        char cmd[160];
-        if (f && f->dir)
-            ksnprintf(cmd, sizeof cmd, "explorer %s", value);
-        else if (f && (!strcasecmp(fs_ext(f->name), "jpg") || !strcasecmp(fs_ext(f->name), "jpeg")))
-            ksnprintf(cmd, sizeof cmd, "viewer %s", value);
-        else if (f)
-            ksnprintf(cmd, sizeof cmd, "notepad %s", value);
-        else
-            strlcpy(cmd, value, sizeof cmd);
-        ui_launch(cmd);
-    }
     if (cb)
         cb(ok ? value : NULL, ctx);
 }
 
+static int field_y(dlg_t *d) { return PAD + ICON + 14 + d->title_h + (d->text_h ? 6 + d->text_h : 0) + 12; }
+
 static void dlg_paint(window_t *w, gfx_t *g, int cw, int ch)
 {
     dlg_t *d = w->data;
-    int x = 14, y = 14;
-    if (d->icon >= 0) {
-        gfx_blit_alpha(g, x, y, icon_get(d->icon, 32), 255);
-        x += 48;
-    }
-    if (d->kind == DLG_MSG) {
-        gfx_text_wrapped(g, &font_ui, x, y + (d->text_h < 32 ? (32 - d->text_h) / 2 : 0), TEXT_W, d->text, HEX(0x000000), 15);
-    } else if (d->kind == DLG_PROMPT) {
-        gfx_text(g, &font_ui, x, y, d->label, HEX(0x000000));
-        textfield_paint(&d->field, g, x, y + 20, cw - x - 14, true);
-    } else {
-        gfx_text_wrapped(g, &font_ui, x, y, cw - x - 14, d->text, HEX(0x000000), 15);
-        gfx_text(g, &font_ui, 14, 72, "Open:", HEX(0x000000));
-        textfield_paint(&d->field, g, 62, 68, cw - 62 - 14, true);
-    }
+    gfx_blit_alpha(g, (cw - ICON) / 2, PAD, icon_get(d->icon, ICON), 255);
+    int y = PAD + ICON + 14;
+    y += wrap_centered(g, &font_ui_bold, PAD, y, cw - 2 * PAD, d->title, COL_TEXT, 17);
+    if (d->text[0])
+        wrap_centered(g, &font_ui, PAD, y + 6, cw - 2 * PAD, d->text, HEX(0x4A4A4E), 15);
+    if (d->kind == DLG_PROMPT)
+        textfield_paint(&d->field, g, PAD, field_y(d), cw - 2 * PAD, true);
     buttons_paint(&d->btns, g);
 }
 
@@ -95,10 +104,18 @@ static void dlg_mouse(window_t *w, int kind, int x, int y, int button)
         finish(w, true);
     else if (id == BTN_CANCEL)
         finish(w, false);
-    else if (id == BTN_BROWSE) {
-        finish(w, false);
-        ui_launch("mydocs");
+}
+
+/* the buttons and the text field take clicks; the rest of the alert drags it */
+static bool dlg_caption_hit(window_t *w, int x, int y)
+{
+    dlg_t *d = w->data;
+    for (int i = 0; i < d->btns.n; i++) {
+        button_t *b = &d->items[i];
+        if (x >= b->x && y >= b->y && x < b->x + b->w && y < b->y + b->h)
+            return true;
     }
+    return d->kind == DLG_PROMPT && y >= field_y(d) - 4 && y < field_y(d) + 26;
 }
 
 static void dlg_tick(window_t *w) { wm_invalidate_client(w); }
@@ -111,21 +128,32 @@ static void dlg_close(window_t *w)
     kfree(d);
 }
 
-static const window_ops_t dlg_ops = { dlg_paint, dlg_key, dlg_mouse, dlg_tick, dlg_close, NULL };
+static const window_ops_t dlg_ops = { dlg_paint, dlg_key, dlg_mouse, dlg_tick, dlg_close, NULL, dlg_caption_hit };
 
-static window_t *make(dlg_t *d, window_t *owner, const char *title, int icon, int cw, int ch)
+static window_t *make(dlg_t *d, window_t *owner, int nbuttons, const char *ok_label)
 {
-    window_t *w = wm_create(title, icon, cw, ch, &dlg_ops, d, WF_DIALOG | (owner ? WF_NO_TASKBAR : 0));
+    d->title_h = wrap_centered(NULL, &font_ui_bold, 0, 0, AL_W - 2 * PAD, d->title, 0, 17);
+    d->text_h = d->text[0] ? wrap_centered(NULL, &font_ui, 0, 0, AL_W - 2 * PAD, d->text, 0, 15) : 0;
+    int ch = field_y(d) + (d->kind == DLG_PROMPT ? 21 + 18 : 4) + 24 + PAD;
+    int by = ch - PAD - 24;
+    if (nbuttons == 1) {
+        d->items[0] = (button_t){ PAD, by, AL_W - 2 * PAD, 24, ok_label, BTN_OK, BTN_DEFAULT };
+    } else {
+        int bw = (AL_W - 2 * PAD - 10) / 2;
+        d->items[0] = (button_t){ PAD, by, bw, 24, "Cancel", BTN_CANCEL, 0 };
+        d->items[1] = (button_t){ PAD + bw + 10, by, bw, 24, ok_label, BTN_OK, BTN_DEFAULT };
+    }
+    d->btns.items = d->items;
+    d->btns.n = nbuttons;
+    d->btns.hover = d->btns.pressed = -1;
+    window_t *w = wm_create(d->title, d->icon, AL_W, ch, &dlg_ops, d, WF_DIALOG | WF_ALERT | (owner ? WF_NO_TASKBAR : 0));
     if (owner && wm_alive(owner)) {
         wm_set_modal(owner, w);
-        rect_t oc = wm_client_rect(owner);
-        wm_move(w, CLAMP(oc.x + (oc.w - w->w) / 2, 0, g_screen.w - w->w),
-                CLAMP(oc.y + (oc.h - w->h) / 2, 0, g_screen.h - TASKBAR_H - w->h));
+        rect_t oc = wm_client_rect(owner), a = ui_work_area();
+        wm_move(w, CLAMP(oc.x + (oc.w - w->w) / 2, 0, g_screen.w - w->w), CLAMP(oc.y + 40, a.y, a.y + a.h - w->h));
     } else {
         wm_center(w);
     }
-    d->btns.items = d->items;
-    d->btns.hover = d->btns.pressed = -1;
     return w;
 }
 
@@ -133,24 +161,10 @@ void msgbox(window_t *owner, const char *title, const char *text, int icon)
 {
     dlg_t *d = kzalloc(sizeof *d);
     d->kind = DLG_MSG;
-    d->icon = icon;
+    d->icon = icon >= 0 ? icon : ICON_KEPLER;
+    strlcpy(d->title, title, sizeof d->title);
     strlcpy(d->text, text, sizeof d->text);
-    d->text_h = gfx_text_wrapped(NULL, &font_ui, 0, 0, TEXT_W, text, 0, 15);
-    int widest = 0;
-    for (const char *p = text; *p;) {
-        const char *nl = strchr(p, '\n');
-        int n = nl ? nl - p : (int)strlen(p);
-        widest = MAX(widest, text_width_n(&font_ui, p, n));
-        p += n;
-        if (*p)
-            p++;
-    }
-    int cw = MAX(260, MIN(TEXT_W, widest) + (icon >= 0 ? 48 : 0) + 34);
-    int body = MAX(d->text_h, 32);
-    int ch = 14 + body + 18 + 23 + 12;
-    d->items[0] = (button_t){ (cw - 75) / 2, ch - 35, 75, 23, "OK", BTN_OK, BTN_DEFAULT };
-    d->btns.n = 1;
-    make(d, owner, title, icon >= 0 ? icon : ICON_INFO, cw, ch);
+    make(d, owner, 1, "OK");
     ui_beep(icon == ICON_ERROR ? 440 : 660, 90);
 }
 
@@ -158,32 +172,14 @@ void prompt_box(window_t *owner, const char *title, const char *label, const cha
 {
     dlg_t *d = kzalloc(sizeof *d);
     d->kind = DLG_PROMPT;
-    d->icon = -1;
+    d->icon = owner ? owner->icon : ICON_FINDER;
     d->cb = cb;
     d->ctx = ctx;
-    strlcpy(d->label, label, sizeof d->label);
+    strlcpy(d->title, title, sizeof d->title);
+    strlcpy(d->text, label, sizeof d->text);
     textfield_set(&d->field, initial ? initial : "");
-    int cw = 330, ch = 104;
-    d->items[0] = (button_t){ cw - 170, ch - 35, 75, 23, "OK", BTN_OK, BTN_DEFAULT };
-    d->items[1] = (button_t){ cw - 89, ch - 35, 75, 23, "Cancel", BTN_CANCEL, 0 };
-    d->btns.n = 2;
-    window_t *w = make(d, owner, title, ICON_NOTEPAD, cw, ch);
+    window_t *w = make(d, owner, 2, "OK");
     wm_set_tick(w, 530);
 }
 
-void run_dialog(void)
-{
-    dlg_t *d = kzalloc(sizeof *d);
-    d->kind = DLG_RUN;
-    d->icon = ICON_RUN;
-    strlcpy(d->text, "Type the name of a program, folder or document, and KeplerOS will open it for you.", sizeof d->text);
-    textfield_set(&d->field, "");
-    int cw = 360, ch = 140;
-    d->items[0] = (button_t){ cw - 252, ch - 35, 75, 23, "OK", BTN_OK, BTN_DEFAULT };
-    d->items[1] = (button_t){ cw - 170, ch - 35, 75, 23, "Cancel", BTN_CANCEL, 0 };
-    d->items[2] = (button_t){ cw - 89, ch - 35, 75, 23, "Browse...", BTN_BROWSE, 0 };
-    d->btns.n = 3;
-    window_t *w = make(d, NULL, "Run", ICON_RUN, cw, ch);
-    wm_move(w, 6, g_screen.h - TASKBAR_H - w->h - 6);
-    wm_set_tick(w, 530);
-}
+void run_dialog(void) { spotlight_open(); }

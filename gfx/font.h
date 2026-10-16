@@ -15,8 +15,9 @@ typedef struct {
     const uint8_t *bits;
 } font_t;
 
-extern const font_t font_ui, font_ui_bold, font_title, font_start, font_mono;
-extern const font_t font_heading, font_big, font_big_bold, font_logo, font_logo_small;
+extern const font_t font_ui, font_ui_bold, font_title, font_menu, font_menu_bold, font_mono;
+extern const font_t font_heading, font_big, font_big_bold, font_date, font_display;
+extern const font_t font_clock; /* digits and ':' only */
 
 int text_width(const font_t *f, const char *s);
 int text_width_n(const font_t *f, const char *s, int n);

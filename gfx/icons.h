@@ -2,20 +2,22 @@
 
 #include "gfx.h"
 
+/* Full-colour icons, Big Sur style. Apps keep their old names (ICON_CMD is the
+ * Terminal, ICON_DISPLAY System Preferences, ICON_RECYCLE the Trash...). */
 enum {
     ICON_COMPUTER,
     ICON_DOCUMENTS,
-    ICON_RECYCLE,
+    ICON_RECYCLE, /* empty Trash */
     ICON_CMD,
     ICON_NOTEPAD,
     ICON_CALC,
     ICON_PAINT,
     ICON_MINES,
     ICON_TASKMGR,
-    ICON_PICTURES,
+    ICON_PICTURES, /* the Preview app */
     ICON_HELP,
     ICON_DISPLAY,
-    ICON_RUN,
+    ICON_RUN, /* Spotlight */
     ICON_LOGOFF,
     ICON_POWER,
     ICON_FOLDER,
@@ -23,7 +25,7 @@ enum {
     ICON_DRIVE,
     ICON_CDROM,
     ICON_KEPLER,
-    ICON_ALLPROGS,
+    ICON_ALLPROGS, /* Launchpad */
     ICON_STANDBY,
     ICON_RESTART,
     ICON_SWITCHUSER,
@@ -37,14 +39,59 @@ enum {
     ICON_FORWARD,
     ICON_UP,
     ICON_SYSINFO,
+    ICON_FINDER,
+    ICON_TRASH_FULL,
+    ICON_IMAGEFILE,
+    ICON_FOLDER_DESKTOP,
+    ICON_FOLDER_PICTURES,
+    ICON_FOLDER_DOWNLOADS,
+    ICON_FOLDER_APPS,
+    ICON_GUEST,
+
+    /* white template glyphs: draw them with gfx_blit_tint in any colour */
+    GLYPH_KEPLER,
+    GLYPH_WIFI,
+    GLYPH_SPEAKER,
+    GLYPH_SEARCH,
+    GLYPH_CONTROL,
+    GLYPH_AIRDROP,
+    GLYPH_RECENTS,
+    GLYPH_DESKTOP,
+    GLYPH_APPS,
+    GLYPH_DOCUMENT,
+    GLYPH_DOWNLOADS,
+    GLYPH_CLOUD,
+    GLYPH_DISK,
+    GLYPH_TRASH,
+    GLYPH_CHEVRON_L,
+    GLYPH_CHEVRON_R,
+    GLYPH_GRID,
+    GLYPH_LIST,
+    GLYPH_COLUMNS,
+    GLYPH_GALLERY,
+    GLYPH_GROUP,
+    GLYPH_SHARE,
+    GLYPH_TAG,
+    GLYPH_MORE,
+    GLYPH_ARROW_R,
+    GLYPH_SLEEP,
+    GLYPH_RESTART,
+    GLYPH_POWER,
+    GLYPH_PERSON,
+    GLYPH_TL_CLOSE, /* the traffic light marks */
+    GLYPH_TL_MIN,
+    GLYPH_TL_ZOOM,
+    GLYPH_CHECK,
+    GLYPH_CHEVRON_D,
+    GLYPH_CMD, /* the Command key sign */
     ICON_COUNT
 };
 
-/* Rendered on first use and cached; sizes 16, 24, 32 and 48 look best. */
+/* Rendered on first use and cached for the common sizes (12 to 128 px). */
 const image_t *icon_get(int id, int size);
 void icons_prerender(void (*progress)(int done, int total));
 
-/* the account picture, cut from the wallpaper */
+/* the account picture, cut from the wallpaper; round */
 void icons_set_user_picture(const image_t *wallpaper);
 const image_t *icon_user_picture(int size);
 

@@ -314,6 +314,7 @@ void fs_init(void)
     fs_create("/Documents", true);
     fs_create("/Documents/My Pictures", true);
     fs_create("/Desktop", true);
+    fs_create("/Downloads", true);
     fs_create("/Kepler", true);
     fs_create("/Recycled", true);
 

@@ -470,7 +470,7 @@ static void neofetch(term_t *t)
     ksnprintf(lines[4], 96, "\x1b" "bUptime\x1bx: %s", up);
     ksnprintf(lines[5], 96, "\x1b" "bShell\x1bx: kepler-cmd");
     ksnprintf(lines[6], 96, "\x1b" "bResolution\x1bx: %s", res);
-    ksnprintf(lines[7], 96, "\x1b" "bWM\x1bx: Kepler Luna");
+    ksnprintf(lines[7], 96, "\x1b" "bWM\x1bx: Kepler Big Sur");
     ksnprintf(lines[8], 96, "\x1b" "bCPU\x1bx: %.38s", g_sys.cpu_brand);
     ksnprintf(lines[9], 96, "\x1b" "bMemory\x1bx: %s", mem);
     lines[10][0] = 0;
@@ -1025,8 +1025,9 @@ window_t *terminal_open(void)
     tprintf(t, "KeplerOS [Version %s.%s]\n", KEPLER_VERSION, KEPLER_BUILD);
     tputs(t, "(C) Copyright 2026 The KeplerOS Project.\n\n");
     prompt(t);
-    window_t *w = wm_create("Command Prompt", ICON_CMD, COLS * CW + 2 * PAD + SCROLLBAR_W, ROWS * LH + 2 * PAD, &term_ops, t,
-                            WF_NO_MAX);
+    window_t *w = wm_create("kepler -- cmd -- 80x25", ICON_CMD, COLS * CW + 2 * PAD + SCROLLBAR_W, ROWS * LH + 2 * PAD,
+                            &term_ops, t, WF_NO_MAX);
+    wm_set_app(w, "Terminal", NULL, NULL, NULL);
     w->bg = HEX(0x000000);
     wm_set_tick(w, 530);
     return w;

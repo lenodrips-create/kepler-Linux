@@ -12,9 +12,10 @@
 
 char g_user_name[32] = "Kepler";
 
-enum { MODE_BOOT, MODE_WELCOME, MODE_DESKTOP, MODE_STANDBY };
+enum { MODE_BOOT, MODE_LOGIN, MODE_DESKTOP, MODE_STANDBY };
 
 static int mode = MODE_BOOT;
+static bool signed_in; /* a user's session exists (possibly locked) */
 static rect_t dirty;
 static int mx, my, buttons;
 static int cursor = CURSOR_ARROW;
@@ -22,7 +23,7 @@ static rect_t cursor_rect;
 
 static uint32_t last_click_ms;
 static int last_click_x, last_click_y;
-static bool in_taskbar;
+static bool in_topbar, in_dock;
 static bool win_held, win_combo;
 
 static char tip_text[96];
@@ -46,6 +47,14 @@ void ui_invalidate_all(void) { dirty = rect_make(0, 0, g_screen.w, g_screen.h); 
 int ui_mouse_x(void) { return mx; }
 int ui_mouse_y(void) { return my; }
 
+rect_t ui_work_area(void) { return rect_make(0, TOPBAR_H, g_screen.w, g_screen.h - TOPBAR_H - DOCK_RESERVE); }
+
+void shell_windows_changed(void)
+{
+    topbar_changed();
+    dock_changed();
+}
+
 void ui_set_cursor(int c)
 {
     if (c == cursor)
@@ -64,10 +73,10 @@ void ui_tooltip(const char *text, int x, int y)
         return;
     }
     strlcpy(tip_text, text, sizeof tip_text);
-    int w = text_width(&font_ui, tip_text) + 10, h = 19;
+    int w = text_width(&font_ui, tip_text) + 14, h = 21;
     x = CLAMP(x, 2, g_screen.w - w - 2);
     y = CLAMP(y, 2, g_screen.h - h - 2);
-    tip_rect = rect_make(x, y, w + 2, h + 2);
+    tip_rect = rect_make(x, y, w + 2, h + 4);
     ui_invalidate(tip_rect);
 }
 
@@ -76,28 +85,71 @@ static void tooltip_paint(gfx_t *g)
     if (!tip_text[0])
         return;
     rect_t r = tip_rect;
-    gfx_fill(g, r.x + 2, r.y + 2, r.w - 2, r.h - 2, RGBA(0, 0, 0, 50));
-    gfx_fill(g, r.x, r.y, r.w - 2, r.h - 2, HEX(0xFFFFE1));
-    gfx_rect(g, r.x, r.y, r.w - 2, r.h - 2, HEX(0x000000));
-    gfx_text(g, &font_ui, r.x + 5, r.y + 3, tip_text, HEX(0x000000));
+    int w = r.w - 2, h = r.h - 4;
+    gfx_round_rect(g, r.x, r.y + 2, w, h, 4, RGBA(0, 0, 0, 30), CORNER_ALL);
+    gfx_round_rect(g, r.x, r.y, w, h, 4, HEX(0xF3F3F3), CORNER_ALL);
+    gfx_round_frame(g, r.x, r.y, w, h, 4, RGBA(0, 0, 0, 60), CORNER_ALL);
+    gfx_text(g, &font_ui, r.x + 7, r.y + (h - font_ui.height) / 2, tip_text, COL_TEXT);
+}
+
+/* Translucent surfaces blur whatever is already drawn under them, so when any
+ * part of one needs repainting all of it does, from the bottom up, and the
+ * pointer (drawn last, straight into the back buffer) must not be lying in
+ * what it samples. */
+static void expand_dirty(void)
+{
+    if (mode != MODE_DESKTOP || rect_empty(dirty))
+        return;
+    rect_t surf[8];
+    int n = 0;
+    surf[n++] = dock_rect();
+    n += menu_rects(surf + n, 4);
+    if (spotlight_is_open())
+        surf[n++] = spotlight_rect();
+    if (overlay_is_open())
+        surf[n++] = overlay_rect();
+    for (int pass = 0; pass < 4; pass++) {
+        bool grew = false;
+        for (int i = 0; i < n; i++) {
+            if (rect_empty(rect_intersect(dirty, surf[i])))
+                continue;
+            rect_t u = rect_intersect(rect_union(dirty, surf[i]), rect_make(0, 0, g_screen.w, g_screen.h));
+            if (u.x != dirty.x || u.y != dirty.y || u.w != dirty.w || u.h != dirty.h) {
+                dirty = u;
+                grew = true;
+            }
+        }
+        if (!grew)
+            break;
+    }
+    for (int i = 0; i < n; i++) {
+        rect_t m = rect_make(surf[i].x - 24, surf[i].y - 24, surf[i].w + 48, surf[i].h + 48);
+        if (!rect_empty(rect_intersect(dirty, m)) && !rect_empty(rect_intersect(cursor_rect, m)))
+            dirty = rect_union(dirty, cursor_rect);
+    }
 }
 
 static void compose(void)
 {
     if (rect_empty(dirty))
         return;
+    expand_dirty();
     gfx_t g = video_gfx();
     g.clip = dirty;
     switch (mode) {
-    case MODE_WELCOME:
-        screens_welcome_paint(&g, dirty);
+    case MODE_LOGIN:
+        screens_login_paint(&g, dirty);
         overlay_paint(&g, dirty);
         break;
     case MODE_DESKTOP:
         desktop_paint(&g, dirty);
         wm_paint(&g, dirty);
-        taskbar_paint(&g, dirty);
-        startmenu_paint(&g);
+        if (launchpad_is_open())
+            launchpad_paint(&g, dirty);
+        else
+            topbar_paint(&g, dirty);
+        dock_paint(&g, dirty);
+        spotlight_paint(&g);
         menu_paint(&g);
         tooltip_paint(&g);
         overlay_paint(&g, dirty);
@@ -137,6 +189,12 @@ static void beep_update(void)
 
 /* ---- launching -------------------------------------------------------------------------- */
 
+static void close_launchers(void)
+{
+    launchpad_close();
+    spotlight_close();
+}
+
 void ui_launch(const char *cmd)
 {
     char name[32];
@@ -152,79 +210,112 @@ void ui_launch(const char *cmd)
     while (*arg == ' ')
         arg++;
 
-    startmenu_close();
-    if (!strcmp(name, "notepad") || !strcmp(name, "edit"))
+    close_launchers();
+    if (!strcmp(name, "notepad") || !strcmp(name, "edit") || !strcmp(name, "textedit"))
         notepad_open(*arg ? arg : NULL);
-    else if (!strcmp(name, "calc"))
+    else if (!strcmp(name, "calc") || !strcmp(name, "calculator"))
         calc_open();
     else if (!strcmp(name, "cmd") || !strcmp(name, "terminal"))
         terminal_open();
     else if (!strcmp(name, "explorer"))
         explorer_open(*arg ? arg : "::computer");
-    else if (!strcmp(name, "mycomputer"))
-        explorer_open("::computer");
-    else if (!strcmp(name, "mydocs"))
+    else if (!strcmp(name, "finder") || !strcmp(name, "mydocs") || !strcmp(name, "documents"))
         explorer_open("/Documents");
+    else if (!strcmp(name, "mycomputer") || !strcmp(name, "computer"))
+        explorer_open("::computer");
     else if (!strcmp(name, "mypics"))
         explorer_open("/Documents/My Pictures");
-    else if (!strcmp(name, "recycle"))
+    else if (!strcmp(name, "recycle") || !strcmp(name, "trash"))
         explorer_open("/Recycled");
     else if (!strcmp(name, "paint") || !strcmp(name, "mspaint"))
         paint_open();
     else if (!strcmp(name, "mines") || !strcmp(name, "winmine") || !strcmp(name, "minesweeper"))
         mines_open();
-    else if (!strcmp(name, "taskmgr"))
+    else if (!strcmp(name, "taskmgr") || !strcmp(name, "activity"))
         taskmgr_open(*arg ? katoi(arg) : 0);
     else if (!strcmp(name, "about") || !strcmp(name, "winver"))
         about_open();
-    else if (!strcmp(name, "display") || !strcmp(name, "control") || !strcmp(name, "desk.cpl"))
+    else if (!strcmp(name, "display") || !strcmp(name, "control") || !strcmp(name, "desk.cpl") ||
+             !strcmp(name, "sysprefs") || !strcmp(name, "preferences"))
         display_open();
-    else if (!strcmp(name, "viewer") || !strcmp(name, "pictures"))
+    else if (!strcmp(name, "viewer") || !strcmp(name, "pictures") || !strcmp(name, "preview"))
         viewer_open(*arg ? arg : "/Documents/My Pictures/Kepler Earth.jpg");
-    else if (!strcmp(name, "sysprops") || !strcmp(name, "sysdm.cpl"))
+    else if (!strcmp(name, "sysprops") || !strcmp(name, "sysdm.cpl") || !strcmp(name, "sysinfo"))
         sysprops_open();
-    else if (!strcmp(name, "run"))
-        run_dialog();
+    else if (!strcmp(name, "run") || !strcmp(name, "spotlight"))
+        spotlight_open();
+    else if (!strcmp(name, "launchpad"))
+        launchpad_toggle();
+    else if (!strcmp(name, "lock"))
+        ui_lock();
+    else if (!strcmp(name, "sleep"))
+        ui_power(0);
     else if (!strcmp(name, "shutdown"))
         overlay_open(0);
-    else if (!strcmp(name, "logoff"))
+    else if (!strcmp(name, "restart") || !strcmp(name, "reboot"))
+        overlay_open(2);
+    else if (!strcmp(name, "logoff") || !strcmp(name, "logout"))
         overlay_open(1);
     else {
         char msg[160];
-        ksnprintf(msg, sizeof msg, "KeplerOS cannot find '%s'. Make sure you typed the name correctly, and then try again.",
-                  name);
+        ksnprintf(msg, sizeof msg, "KeplerOS can't find \"%s\". Check the spelling and try again.", name);
         msgbox(NULL, name, msg, ICON_ERROR);
     }
 }
 
 void ui_login(void)
 {
+    kprintf("desktop: %s signed in\n", g_user_name);
     ui_set_cursor(CURSOR_ARROW);
     mode = MODE_DESKTOP;
+    signed_in = true;
     ui_invalidate_all();
-    taskbar_changed();
+    shell_windows_changed();
+}
+
+void ui_lock(void)
+{
+    menu_close();
+    close_launchers();
+    ui_tooltip(NULL, 0, 0);
+    screens_login_reset(true);
+    mode = MODE_LOGIN;
+    ui_invalidate_all();
 }
 
 void ui_logoff(void)
 {
-    startmenu_close();
     menu_close();
+    close_launchers();
     for (window_t *w = wm_first(); w; w = w->next)
         wm_close(w);
-    screens_welcome_reset();
-    mode = MODE_WELCOME;
+    signed_in = false;
+    screens_login_reset(false);
+    mode = MODE_LOGIN;
     ui_invalidate_all();
 }
 
 void ui_power(int action)
 {
     if (action == 0) {
-        startmenu_close();
+        menu_close();
+        close_launchers();
         mode = MODE_STANDBY;
         ui_invalidate_all();
         return;
     }
     screens_goodbye(action);
+}
+
+/* waking from sleep always asks for the password again */
+static void wake(void)
+{
+    if (signed_in)
+        ui_lock();
+    else {
+        mode = MODE_LOGIN;
+        ui_invalidate_all();
+    }
 }
 
 bool ui_overlay_active(void) { return overlay_is_open(); }
@@ -234,11 +325,11 @@ bool ui_overlay_active(void) { return overlay_is_open(); }
 static void route_mouse(int kind, int button)
 {
     int x = mx, y = my;
-    if (mode == MODE_WELCOME) {
+    if (mode == MODE_LOGIN) {
         if (overlay_is_open())
             overlay_mouse(kind, x, y, button);
         else
-            screens_welcome_mouse(kind, x, y, button);
+            screens_login_mouse(kind, x, y, button);
         return;
     }
     if (tip_text[0] && (kind != MS_MOVE || !rect_contains(rect_make(tip_rect.x - 40, tip_rect.y - 40, tip_rect.w + 80, tip_rect.h + 80), x, y)))
@@ -255,23 +346,40 @@ static void route_mouse(int kind, int button)
         if (menu_mouse(kind, x, y, button))
             return;
     }
-    if (startmenu_is_open() && startmenu_mouse(kind, x, y, button))
+    if (spotlight_is_open() && spotlight_mouse(kind, x, y, button))
         return;
     if (wm_dragging()) {
         wm_mouse(kind, x, y, buttons, button);
         return;
     }
-    bool over_bar = y >= g_screen.h - TASKBAR_H;
-    if (over_bar || in_taskbar) {
+    bool over_bar = y < TOPBAR_H && !launchpad_is_open();
+    if (over_bar || in_topbar) {
         if (!over_bar) {
-            taskbar_mouse(MS_LEAVE, x, y, 0);
-            in_taskbar = false;
+            topbar_mouse(MS_LEAVE, x, y, 0);
+            in_topbar = false;
         } else {
-            in_taskbar = true;
+            in_topbar = true;
             ui_set_cursor(CURSOR_ARROW);
-            taskbar_mouse(kind, x, y, button);
+            topbar_mouse(kind, x, y, button);
             return;
         }
+    }
+    bool over_dock = rect_contains(dock_rect(), x, y);
+    if (over_dock || in_dock) {
+        if (!over_dock) {
+            dock_mouse(MS_LEAVE, x, y, 0);
+            in_dock = false;
+        } else {
+            in_dock = true;
+            ui_set_cursor(CURSOR_ARROW);
+            dock_mouse(kind, x, y, button);
+            return;
+        }
+    }
+    if (launchpad_is_open()) {
+        ui_set_cursor(CURSOR_ARROW);
+        launchpad_mouse(kind, x, y, button);
+        return;
     }
     if (wm_mouse(kind, x, y, buttons, button))
         return;
@@ -283,7 +391,7 @@ static void handle_mouse(const input_event_t *ev)
 {
     if (mode == MODE_STANDBY) {
         if (ev->buttons)
-            ui_login();
+            wake();
         return;
     }
     if (ev->dx || ev->dy) {
@@ -326,6 +434,7 @@ static void handle_mouse(const input_event_t *ev)
     }
 }
 
+/* The Windows key plays the Command key: tapped alone it opens Launchpad. */
 static bool global_key(const input_event_t *ev)
 {
     uint8_t m = ev->mods;
@@ -334,8 +443,11 @@ static bool global_key(const input_event_t *ev)
             win_held = true;
             win_combo = false;
         } else {
-            if (win_held && !win_combo && !overlay_is_open())
-                startmenu_toggle();
+            if (win_held && !win_combo && !overlay_is_open()) {
+                menu_close();
+                spotlight_close();
+                launchpad_toggle();
+            }
             win_held = false;
         }
         return true;
@@ -344,11 +456,28 @@ static bool global_key(const input_event_t *ev)
         return false;
     if (win_held) {
         win_combo = true;
+        window_t *a = wm_active();
         switch (ktolower(ev->key)) {
+        case ' ':
+        case 'r': ui_launch("spotlight"); return true;
         case 'd': wm_minimize_all(); return true;
-        case 'e': ui_launch("mycomputer"); return true;
-        case 'r': ui_launch("run"); return true;
-        case 'm': wm_minimize_all(); return true;
+        case 'e':
+        case 'n': ui_launch("finder"); return true;
+        case 'm':
+            if (a)
+                wm_minimize(a);
+            return true;
+        case 'h':
+            if (a)
+                wm_hide_app(a->app);
+            return true;
+        case 'w':
+        case 'q':
+            if (a)
+                wm_close(a);
+            return true;
+        case 'l': ui_lock(); return true;
+        case KEY_TAB: wm_cycle(); return true;
         }
     }
     if ((m & MOD_CTRL) && (m & MOD_ALT) && (ev->key == KEY_DELETE || ev->key == '.')) {
@@ -356,7 +485,7 @@ static bool global_key(const input_event_t *ev)
         return true;
     }
     if ((m & MOD_CTRL) && ev->key == KEY_ESC) {
-        startmenu_toggle();
+        launchpad_toggle();
         return true;
     }
     if ((m & MOD_ALT) && ev->key == KEY_F4) {
@@ -378,14 +507,14 @@ static void handle_key(const input_event_t *ev)
 {
     if (mode == MODE_STANDBY) {
         if (ev->pressed)
-            ui_login();
+            wake();
         return;
     }
-    if (mode == MODE_WELCOME) {
+    if (mode == MODE_LOGIN) {
         if (overlay_is_open())
             overlay_key(ev);
         else
-            screens_welcome_key(ev);
+            screens_login_key(ev);
         return;
     }
     if (overlay_is_open()) {
@@ -400,8 +529,12 @@ static void handle_key(const input_event_t *ev)
         menu_key(ev);
         return;
     }
-    if (startmenu_is_open()) {
-        startmenu_key(ev);
+    if (spotlight_is_open()) {
+        spotlight_key(ev);
+        return;
+    }
+    if (launchpad_is_open()) {
+        launchpad_key(ev);
         return;
     }
     if (wm_active())
@@ -422,7 +555,7 @@ static void boot_work(void (*progress)(int pct))
     if (!jpeg_decode(wallpaper_jpg, wallpaper_jpg_end - wallpaper_jpg, &src))
         panic("could not decode the wallpaper");
     progress(25);
-    image_t *wall = image_cover(src, g_screen.w, g_screen.h - 0);
+    image_t *wall = image_cover(src, g_screen.w, g_screen.h);
     progress(55);
     image_sharpen(wall, 90);
     progress(65);
@@ -446,9 +579,10 @@ void desktop_main(multiboot_info_t *mbi)
     g_sys.boot_ms = timer_ms();
     kprintf("shell: boot finished in %u ms\n", g_sys.boot_ms);
 
-    mode = MODE_WELCOME;
-    screens_welcome_reset();
+    mode = MODE_LOGIN;
+    screens_login_reset(false);
     ui_invalidate_all();
+    kprintf("login: shown\n");
 
     uint32_t last_tick = 0;
     for (;;) {
@@ -463,10 +597,12 @@ void desktop_main(multiboot_info_t *mbi)
         if (now - last_tick >= 15) {
             last_tick = now;
             if (mode == MODE_DESKTOP) {
-                taskbar_tick();
+                topbar_tick();
+                dock_tick();
+                spotlight_tick();
                 overlay_tick();
-            } else if (mode == MODE_WELCOME) {
-                screens_welcome_tick();
+            } else if (mode == MODE_LOGIN) {
+                screens_login_tick();
                 overlay_tick();
             }
             wm_tick();
@@ -495,25 +631,23 @@ void gui_panic(const char *msg)
         return;
     }
     gfx_t g = video_gfx();
-    gfx_fill(&g, 0, 0, g_screen.w, g_screen.h, HEX(0x0B3D91));
-    int x = 120, y = 140;
-    gfx_text(&g, &font_logo_small, x, y, "KeplerOS", HEX(0xFFFFFF));
-    y += 70;
-    gfx_text(&g, &font_big, x, y, "A problem has been detected and KeplerOS has been shut down", HEX(0xFFFFFF));
-    y += 30;
-    gfx_text(&g, &font_big, x, y, "to prevent damage to your computer.", HEX(0xFFFFFF));
-    y += 60;
+    /* dim whatever was on screen and put the message on a dark panel */
+    gfx_desaturate(&g, 0, 0, g_screen.w, g_screen.h, 200, 190);
+    int pw = 760, ph = 300, px = (g_screen.w - pw) / 2, py = (g_screen.h - ph) / 2;
+    gfx_round_rect(&g, px, py, pw, ph, 14, RGBA(28, 28, 30, 235), CORNER_ALL);
+    gfx_blit_tint(&g, px + (pw - 48) / 2, py + 26, icon_get(GLYPH_POWER, 48), HEX(0xFFFFFF));
+    gfx_text_centered(&g, &font_heading, px, py + 92, pw, "Your computer needs to restart because of a problem.", HEX(0xFFFFFF));
+    gfx_text_centered(&g, &font_ui, px, py + 118, pw, "Press the power button, or restart the virtual machine.", HEX(0xB8B8BE));
+    int x = px + 40, y = py + 156;
     const char *p = msg;
-    while (*p) {
+    while (*p && y < py + ph - 24) {
         const char *nl = strchr(p, '\n');
         int n = nl ? nl - p : (int)strlen(p);
-        gfx_text_n(&g, &font_mono, x, y, p, n, HEX(0xFFFFFF));
-        y += 20;
+        gfx_text_n(&g, &font_mono, x, y, p, n, HEX(0xE5E5EA));
+        y += 19;
         p += n;
         if (*p == '\n')
             p++;
     }
-    y += 30;
-    gfx_text(&g, &font_ui, x, y, "Restart your computer. If this screen appears again, check the serial log for details.", HEX(0xC8D8FF));
     video_flush(rect_make(0, 0, g_screen.w, g_screen.h));
 }

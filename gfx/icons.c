@@ -208,24 +208,30 @@ static uint32_t paint_at(cv_t *cv, const paint_t *p, int x, int y)
     return color_lerp(p->c0, p->c1, CLAMP(t, 0, 256));
 }
 
+/* 4x4 supersampled coverage of device pixel (px, py), 0..255 */
+static int coverage(cv_t *cv, const shape_t *s, int px, int py)
+{
+    int n = 0;
+    for (int j = 0; j < 4; j++)
+        for (int i = 0; i < 4; i++) {
+            int sx = px * 8 + 1 + 2 * i, sy = py * 8 + 1 + 2 * j;
+            if (cv->clip && (sx < cv->cx0 || sx >= cv->cx1 || sy < cv->cy0 || sy >= cv->cy1))
+                continue;
+            if (inside(s, sx, sy))
+                n++;
+        }
+    return n * 255 / 16;
+}
+
 static void fill(cv_t *cv, shape_t *s, paint_t p)
 {
     int px0 = MAX(0, s->bx0 >> 3), py0 = MAX(0, s->by0 >> 3);
     int px1 = MIN(cv->size - 1, (s->bx1 >> 3) + 1), py1 = MIN(cv->size - 1, (s->by1 >> 3) + 1);
     for (int py = py0; py <= py1; py++)
         for (int px = px0; px <= px1; px++) {
-            int n = 0;
-            for (int j = 0; j < 4; j++)
-                for (int i = 0; i < 4; i++) {
-                    int sx = px * 8 + 1 + 2 * i, sy = py * 8 + 1 + 2 * j;
-                    if (cv->clip && (sx < cv->cx0 || sx >= cv->cx1 || sy < cv->cy0 || sy >= cv->cy1))
-                        continue;
-                    if (inside(s, sx, sy))
-                        n++;
-                }
-            if (!n)
+            int cov = coverage(cv, s, px, py);
+            if (!cov)
                 continue;
-            int cov = n * 255 / 16;
             uint32_t *d = &cv->img->px[py * cv->size + px];
             if (p.erase) {
                 uint32_t a = (*d >> 24) * (255 - cov) / 255;
@@ -376,12 +382,6 @@ static void orrect(cv_t *cv, float x, float y, float w, float h, float r, uint32
     rrect(cv, x + PX, y + PX, w - 2 * PX, h - 2 * PX, MAX(0, r - PX), p);
 }
 
-static void ocircle(cv_t *cv, float cx, float cy, float r, uint32_t outline, paint_t p)
-{
-    circle(cv, cx, cy, r, solid(outline));
-    circle(cv, cx, cy, r - PX, p);
-}
-
 static void glyph_text(cv_t *cv, const char *s, uint32_t c)
 {
     const font_t *f = cv->size >= 40 ? &font_big_bold : cv->size >= 28 ? &font_big_bold
@@ -392,148 +392,620 @@ static void glyph_text(cv_t *cv, const char *s, uint32_t c)
 
 /* ---- icon artwork ------------------------------------------------------------------ */
 
-static void shadow(cv_t *cv, float cx, float cy, float rx)
+#define WHITE solid(HEX(0xFFFFFF))
+
+typedef void (*icon_fn)(cv_t *cv);
+
+static void soft_shadow(cv_t *cv, float cx, float cy, float rx)
 {
-    ellipse(cv, cx, cy, rx, 1.8f, rad(cx, cy, rx, RGBA(0, 0, 0, 70), RGBA(0, 0, 0, 0)));
+    ellipse(cv, cx, cy, rx, 1.6f, rad(cx, cy, rx, RGBA(0, 0, 0, 60), RGBA(0, 0, 0, 0)));
 }
 
-static void monitor(cv_t *cv, float x, float y, float w, float h)
+static shape_t rrect_shape(cv_t *cv, float x, float y, float w, float h, float r)
 {
-    /* stand */
-    rrect(cv, x + w / 2 - 3, y + h - 1, 6, 4.5f, 0, lin(0, 0, 32, 0, HEX(0x9AA3AD), HEX(0x6F7884)));
-    orrect(cv, x + w / 2 - 8, y + h + 2.5f, 16, 3.5f, 1.5f, HEX(0x58616C), vlin(y + h + 2, y + h + 6, HEX(0xEEF0F2), HEX(0xA6AEB8)));
-    /* case */
-    orrect(cv, x, y, w, h, 2.5f, HEX(0x4C5662), vlin(y, y + h, HEX(0xF8F9FA), HEX(0xBCC3CB)));
-    rrect(cv, x + 2.4f, y + 2.4f, w - 4.8f, h - 5.6f, 1, solid(HEX(0x343C46)));
+    shape_t s = { 0 };
+    s.kind = SH_RRECT;
+    s.x0 = U(cv, x);
+    s.y0 = U(cv, y);
+    s.x1 = U(cv, x + w);
+    s.y1 = U(cv, y + h);
+    s.r = MAX(0, U(cv, r));
+    s.bx0 = s.x0;
+    s.by0 = s.y0;
+    s.bx1 = s.x1;
+    s.by1 = s.y1;
+    return s;
+}
+
+/* a transparent layer the size of the canvas; drawn into, then masked and merged */
+static cv_t layer_new(cv_t *cv)
+{
+    cv_t l = *cv;
+    l.img = image_new(cv->size, cv->size);
+    l.g = gfx_for_image(l.img);
+    l.clip = false;
+    return l;
+}
+
+static void layer_merge(cv_t *cv, cv_t *l, const shape_t *mask)
+{
+    for (int py = 0; py < cv->size; py++)
+        for (int px = 0; px < cv->size; px++) {
+            uint32_t *d = &l->img->px[py * cv->size + px];
+            if (!(*d >> 24))
+                continue;
+            uint32_t a = (*d >> 24) * coverage(l, mask, px, py) / 255;
+            *d = (*d & 0xFFFFFF) | (a << 24);
+        }
+    gfx_blit_alpha(&cv->g, 0, 0, l->img, 255);
+    image_free(l->img);
+}
+
+/* the Big Sur app icon shape: a rounded square over a soft shadow */
+#define SQ_X 3.0f
+#define SQ_Y 2.4f
+#define SQ_S 26.0f
+#define SQ_R 5.9f
+
+static void squircle_merge(cv_t *cv, cv_t *l)
+{
+    rrect(cv, SQ_X - 0.5f, SQ_Y + 0.4f, SQ_S + 1.0f, SQ_S + 1.1f, SQ_R + 0.5f, solid(RGBA(0, 0, 0, 20)));
+    rrect(cv, SQ_X, SQ_Y + 0.7f, SQ_S, SQ_S, SQ_R, solid(RGBA(0, 0, 0, 46)));
+    shape_t m = rrect_shape(cv, SQ_X, SQ_Y, SQ_S, SQ_S, SQ_R);
+    layer_merge(cv, l, &m);
+}
+
+static void backdrop(cv_t *l, uint32_t top, uint32_t bottom)
+{
+    rrect(l, 0, 0, 32, 32, 0, vlin(SQ_Y, SQ_Y + SQ_S, top, bottom));
+}
+
+/* ---- glyphs (white on transparent) ---- */
+
+static void g_kepler(cv_t *cv)
+{
+    ring_ex(cv, 16, 16.8f, 14.6f, 4.6f, 2.0f, -20, -1, 0, 0, WHITE);
+    circle(cv, 16, 16, 8.6f, WHITE);
+    ring_ex(cv, 16, 16.8f, 15.6f, 5.6f, 4.0f, -20, 1, 0, 0, erase());
+    ring_ex(cv, 16, 16.8f, 14.6f, 4.6f, 2.0f, -20, 1, 0, 0, WHITE);
+    circle(cv, 27.2f, 7.0f, 2.1f, WHITE);
+}
+
+static void g_wifi(cv_t *cv)
+{
+    circle(cv, 16, 25, 2.7f, WHITE);
+    ring(cv, 16, 25, 10.4f, 3.0f, -45, 225, WHITE);
+    ring(cv, 16, 25, 17.4f, 3.0f, -45, 225, WHITE);
+}
+
+static void g_speaker(cv_t *cv)
+{
+    const float body[] = { 3.5f, 12, 9, 12, 16, 5.5f, 16, 26.5f, 9, 20, 3.5f, 20 };
+    poly(cv, body, 6, WHITE);
+    ring(cv, 16.5f, 16, 6.6f, 2.5f, 50, 310, WHITE);
+    ring(cv, 16.5f, 16, 12.2f, 2.5f, 52, 308, WHITE);
+}
+
+static void g_search(cv_t *cv)
+{
+    ring(cv, 13.4f, 13.4f, 9.6f, 2.9f, 0, 0, WHITE);
+    line(cv, 20.4f, 20.4f, 27, 27, 3.4f, WHITE);
+}
+
+static void g_control(cv_t *cv)
+{
+    rrect(cv, 3, 4.6f, 26, 10, 5, WHITE);
+    rrect(cv, 5.5f, 7.1f, 21, 5, 2.5f, erase());
+    circle(cv, 9.6f, 9.6f, 3.6f, WHITE);
+    rrect(cv, 3, 17.4f, 26, 10, 5, WHITE);
+    rrect(cv, 5.5f, 19.9f, 21, 5, 2.5f, erase());
+    circle(cv, 22.4f, 22.4f, 3.6f, WHITE);
+}
+
+static void g_airdrop(cv_t *cv)
+{
+    circle(cv, 16, 17.5f, 3.2f, WHITE);
+    ring(cv, 16, 17.5f, 8.8f, 2.6f, 35, 145, WHITE);
+    ring(cv, 16, 17.5f, 14.6f, 2.6f, 40, 140, WHITE);
+}
+
+static void g_recents(cv_t *cv)
+{
+    ring(cv, 16, 16, 13.4f, 2.6f, 0, 0, WHITE);
+    line(cv, 16, 16.4f, 16, 8.2f, 2.6f, WHITE);
+    line(cv, 16, 16.4f, 21.2f, 19.6f, 2.6f, WHITE);
+}
+
+static void g_desktop(cv_t *cv)
+{
+    rrect(cv, 2.5f, 4.5f, 27, 18.6f, 2.8f, WHITE);
+    rrect(cv, 5.1f, 7.1f, 21.8f, 13.4f, 1, erase());
+    line(cv, 16, 23, 16, 26.6f, 2.6f, WHITE);
+    line(cv, 10, 27.4f, 22, 27.4f, 2.6f, WHITE);
+}
+
+static void g_apps(cv_t *cv)
+{
+    line(cv, 8, 26, 16, 6.5f, 2.8f, WHITE);
+    line(cv, 16, 6.5f, 24, 26, 2.8f, WHITE);
+    line(cv, 5.5f, 19.4f, 26.5f, 19.4f, 2.8f, WHITE);
+}
+
+static void g_document(cv_t *cv)
+{
+    const float page[] = { 6, 2.5f, 19, 2.5f, 26, 9.5f, 26, 29.5f, 6, 29.5f };
+    poly(cv, page, 5, WHITE);
+    const float in[] = { 8.5f, 5, 17.9f, 5, 23.5f, 10.6f, 23.5f, 27, 8.5f, 27 };
+    poly(cv, in, 5, erase());
+    line(cv, 18.3f, 3.6f, 18.3f, 10.3f, 2.2f, WHITE);
+    line(cv, 18.3f, 10.3f, 25, 10.3f, 2.2f, WHITE);
+}
+
+static void g_photo(cv_t *cv)
+{
+    rrect(cv, 2.5f, 5, 27, 22, 3, WHITE);
+    rrect(cv, 5, 7.5f, 22, 17, 1.2f, erase());
+    const float hill[] = { 5, 24.5f, 13, 14.5f, 18.5f, 20.5f, 21.5f, 17.5f, 27, 24.5f };
+    poly(cv, hill, 5, WHITE);
+    circle(cv, 20.5f, 11.8f, 2.4f, WHITE);
+}
+
+static void g_downloads(cv_t *cv)
+{
+    ring(cv, 16, 16, 13.6f, 2.6f, 0, 0, WHITE);
+    line(cv, 16, 8.4f, 16, 22.4f, 2.6f, WHITE);
+    line(cv, 10.6f, 17.4f, 16, 22.8f, 2.6f, WHITE);
+    line(cv, 21.4f, 17.4f, 16, 22.8f, 2.6f, WHITE);
+}
+
+static void cloud(cv_t *cv, float k, paint_t p)
+{
+    circle(cv, 10.4f, 18.4f, 6.4f - k, p);
+    circle(cv, 17.6f, 14.2f, 8.2f - k, p);
+    circle(cv, 24.2f, 19.2f, 5.6f - k, p);
+    rrect(cv, 4.0f + k, 17.8f + k, 25.8f - 2 * k, 7.2f - 2 * k, 3.6f - k, p);
+}
+
+static void g_cloud(cv_t *cv)
+{
+    cloud(cv, 0, WHITE);
+    cloud(cv, 2.5f, erase());
+    rrect(cv, 8, 14, 17, 8.5f, 3, erase());
+}
+
+static void g_disk(cv_t *cv)
+{
+    rrect(cv, 2.5f, 8.5f, 27, 15, 3.6f, WHITE);
+    rrect(cv, 5.1f, 11.1f, 21.8f, 9.8f, 1.4f, erase());
+    circle(cv, 23.2f, 16, 1.7f, WHITE);
+}
+
+static void g_trash(cv_t *cv)
+{
+    rrect(cv, 11.6f, 2.8f, 8.8f, 6.4f, 2.2f, WHITE);
+    rrect(cv, 14.0f, 5.2f, 4.0f, 4.0f, 0.6f, erase());
+    line(cv, 4.5f, 8.2f, 27.5f, 8.2f, 2.6f, WHITE);
+    const float body[] = { 6.8f, 10.4f, 25.2f, 10.4f, 23.6f, 29.4f, 8.4f, 29.4f };
+    poly(cv, body, 4, WHITE);
+    const float in[] = { 9.3f, 10.4f, 22.7f, 10.4f, 21.3f, 26.9f, 10.7f, 26.9f };
+    poly(cv, in, 4, erase());
+    line(cv, 13.6f, 14, 13.9f, 23.4f, 1.9f, WHITE);
+    line(cv, 18.4f, 14, 18.1f, 23.4f, 1.9f, WHITE);
+}
+
+static void g_chevron_l(cv_t *cv)
+{
+    line(cv, 20.5f, 6, 10.5f, 16, 3.2f, WHITE);
+    line(cv, 10.5f, 16, 20.5f, 26, 3.2f, WHITE);
+}
+
+static void g_chevron_r(cv_t *cv)
+{
+    line(cv, 11.5f, 6, 21.5f, 16, 3.2f, WHITE);
+    line(cv, 21.5f, 16, 11.5f, 26, 3.2f, WHITE);
+}
+
+static void g_chevron_d(cv_t *cv)
+{
+    line(cv, 6.5f, 11.5f, 16, 21, 3.4f, WHITE);
+    line(cv, 16, 21, 25.5f, 11.5f, 3.4f, WHITE);
+}
+
+static void g_grid(cv_t *cv)
+{
+    for (int i = 0; i < 4; i++)
+        rrect(cv, 3.5f + (i % 2) * 13.5f, 3.5f + (i / 2) * 13.5f, 11.5f, 11.5f, 2.8f, WHITE);
+}
+
+static void g_list(cv_t *cv)
+{
+    for (int i = 0; i < 3; i++) {
+        circle(cv, 5.5f, 8 + i * 8, 2.2f, WHITE);
+        line(cv, 11.5f, 8 + i * 8, 28, 8 + i * 8, 2.6f, WHITE);
+    }
+}
+
+static void g_columns(cv_t *cv)
+{
+    rrect(cv, 2.5f, 4.5f, 27, 23, 3.4f, WHITE);
+    rrect(cv, 5, 7, 22, 18, 1.2f, erase());
+    line(cv, 12.6f, 6, 12.6f, 26, 2.4f, WHITE);
+    line(cv, 19.4f, 6, 19.4f, 26, 2.4f, WHITE);
+}
+
+static void g_gallery(cv_t *cv)
+{
+    rrect(cv, 2.5f, 3.5f, 27, 16, 3.4f, WHITE);
+    rrect(cv, 5, 6, 22, 11, 1.2f, erase());
+    for (int i = 0; i < 4; i++)
+        rrect(cv, 2.5f + i * 7.05f, 22, 5.8f, 6, 1.6f, WHITE);
+}
+
+static void g_group(cv_t *cv)
+{
+    for (int i = 0; i < 6; i++)
+        rrect(cv, 2.5f + (i % 3) * 9.4f, 6 + (i / 3) * 10.6f, 8, 9, 2, WHITE);
+}
+
+static void g_share(cv_t *cv)
+{
+    rrect(cv, 6, 11, 20, 18.6f, 3.4f, WHITE);
+    rrect(cv, 8.5f, 13.5f, 15, 13.6f, 1.4f, erase());
+    rrect(cv, 12.2f, 9, 7.6f, 6.6f, 0, erase());
+    line(cv, 16, 3.4f, 16, 19.8f, 2.6f, WHITE);
+    line(cv, 11.2f, 8.2f, 16, 3.4f, 2.6f, WHITE);
+    line(cv, 20.8f, 8.2f, 16, 3.4f, 2.6f, WHITE);
+}
+
+static void g_tag(cv_t *cv)
+{
+    const float out[] = { 15.4f, 3, 29, 3, 29, 16.6f, 16.2f, 29.4f, 2.6f, 15.8f };
+    poly(cv, out, 5, WHITE);
+    const float in[] = { 16.4f, 5.5f, 26.5f, 5.5f, 26.5f, 15.6f, 16.2f, 25.9f, 6.1f, 15.8f };
+    poly(cv, in, 5, erase());
+    circle(cv, 21.8f, 10.2f, 2.0f, WHITE);
+}
+
+static void g_more(cv_t *cv)
+{
+    line(cv, 7.5f, 9, 14.5f, 16, 2.8f, WHITE);
+    line(cv, 14.5f, 16, 7.5f, 23, 2.8f, WHITE);
+    line(cv, 17, 9, 24, 16, 2.8f, WHITE);
+    line(cv, 24, 16, 17, 23, 2.8f, WHITE);
+}
+
+static void g_arrow_r(cv_t *cv)
+{
+    ring(cv, 16, 16, 14.2f, 2.2f, 0, 0, WHITE);
+    line(cv, 9.4f, 16, 22, 16, 2.6f, WHITE);
+    line(cv, 16.6f, 10.4f, 22.2f, 16, 2.6f, WHITE);
+    line(cv, 16.6f, 21.6f, 22.2f, 16, 2.6f, WHITE);
+}
+
+static void g_sleep(cv_t *cv)
+{
+    circle(cv, 15, 17, 11.4f, WHITE);
+    circle(cv, 21.8f, 11.0f, 9.8f, erase());
+}
+
+static void g_restart(cv_t *cv)
+{
+    ring(cv, 16, 17, 11.4f, 2.9f, -100, -20, WHITE);
+    const float head[] = { 13.4f, 0.8f, 21.2f, 5.9f, 13.4f, 11.0f };
+    poly(cv, head, 3, WHITE);
+}
+
+static void g_power(cv_t *cv)
+{
+    ring(cv, 16, 17.4f, 11.6f, 2.9f, -128, -52, WHITE);
+    line(cv, 16, 3.4f, 16, 15.2f, 2.9f, WHITE);
+}
+
+static void g_person(cv_t *cv)
+{
+    circle(cv, 16, 10.4f, 6.2f, WHITE);
+    ellipse(cv, 16, 29, 11.8f, 9.2f, WHITE);
+    rrect(cv, 0, 29, 32, 3, 0, erase());
+}
+
+static void g_tl_close(cv_t *cv)
+{
+    line(cv, 10, 10, 22, 22, 3.6f, WHITE);
+    line(cv, 22, 10, 10, 22, 3.6f, WHITE);
+}
+
+static void g_tl_min(cv_t *cv) { line(cv, 8.5f, 16, 23.5f, 16, 3.8f, WHITE); }
+
+static void g_tl_zoom(cv_t *cv)
+{
+    const float a[] = { 8.4f, 8.4f, 20.4f, 8.4f, 8.4f, 20.4f };
+    const float b[] = { 23.6f, 23.6f, 11.6f, 23.6f, 23.6f, 11.6f };
+    poly(cv, a, 3, WHITE);
+    poly(cv, b, 3, WHITE);
+}
+
+static void g_check(cv_t *cv)
+{
+    line(cv, 7, 16.8f, 13, 22.8f, 3.8f, WHITE);
+    line(cv, 13, 22.8f, 25, 9.2f, 3.8f, WHITE);
+}
+
+static void g_cmd(cv_t *cv)
+{
+    static const float cx[4] = { 8.5f, 23.5f, 8.5f, 23.5f }, cy[4] = { 8.5f, 8.5f, 23.5f, 23.5f };
+    for (int i = 0; i < 4; i++)
+        ring(cv, cx[i], cy[i], 5.2f, 2.4f, 0, 0, WHITE);
+    line(cv, 11, 8.5f, 11, 23.5f, 2.4f, WHITE);
+    line(cv, 21, 8.5f, 21, 23.5f, 2.4f, WHITE);
+    line(cv, 8.5f, 11, 23.5f, 11, 2.4f, WHITE);
+    line(cv, 8.5f, 21, 23.5f, 21, 2.4f, WHITE);
+}
+
+/* a glyph pressed into the front of a folder */
+static void emboss(cv_t *cv, icon_fn glyph)
+{
+    int gs = cv->size * 11 / 32;
+    if (gs < 7)
+        return;
+    cv_t g = { 0 };
+    g.img = image_new(gs, gs);
+    g.g = gfx_for_image(g.img);
+    g.size = gs;
+    glyph(&g);
+    int x = (cv->size - gs) / 2, y = cv->size * 19 / 32 - gs / 2;
+    gfx_blit_tint(&cv->g, x, y, g.img, RGBA(32, 110, 200, 140));
+    image_free(g.img);
+}
+
+/* ---- documents, folders and devices ---- */
+
+static void folder(cv_t *cv)
+{
+    rrect(cv, 2.6f, 6.0f, 26.8f, 22.6f, 2.4f, solid(RGBA(0, 0, 0, 26)));
+    rrect(cv, 3.2f, 5.0f, 11.4f, 6.0f, 2.0f, solid(HEX(0x4D9FEB)));
+    rrect(cv, 3.2f, 7.2f, 25.6f, 20.6f, 2.0f, vlin(7, 28, HEX(0x58A9EF), HEX(0x3A8BDD)));
+    rrect(cv, 3.2f, 10.2f, 25.6f, 17.6f, 2.0f, vlin(10, 28, HEX(0x9AD2FD), HEX(0x6CB7F5)));
+    line(cv, 4.6f, 10.8f, 27.4f, 10.8f, 0.6f, solid(RGBA(255, 255, 255, 150)));
+}
+
+static void draw_folder(cv_t *cv) { folder(cv); }
+
+static void draw_documents(cv_t *cv)
+{
+    folder(cv);
+    emboss(cv, g_document);
+}
+
+static void draw_folder_desktop(cv_t *cv)
+{
+    folder(cv);
+    emboss(cv, g_desktop);
+}
+
+static void draw_folder_pictures(cv_t *cv)
+{
+    folder(cv);
+    emboss(cv, g_photo);
+}
+
+static void draw_folder_downloads(cv_t *cv)
+{
+    folder(cv);
+    emboss(cv, g_downloads);
+}
+
+static void draw_folder_apps(cv_t *cv)
+{
+    folder(cv);
+    emboss(cv, g_apps);
+}
+
+static void doc_page(cv_t *cv)
+{
+    soft_shadow(cv, 16, 29.4f, 9);
+    const float page[] = { 6.5f, 2.5f, 19.8f, 2.5f, 25.5f, 8.2f, 25.5f, 29, 6.5f, 29 };
+    poly(cv, page, 5, solid(HEX(0xBDBFC6)));
+    const float inner[] = { 6.5f + PX, 2.5f + PX, 19.8f - PX * 0.4f, 2.5f + PX, 25.5f - PX, 8.2f + PX * 0.4f,
+                            25.5f - PX, 29 - PX, 6.5f + PX, 29 - PX };
+    poly(cv, inner, 5, solid(HEX(0xFFFFFF)));
+    const float fold[] = { 19.8f, 2.5f, 19.8f, 8.2f, 25.5f, 8.2f };
+    poly(cv, fold, 3, vlin(2, 9, HEX(0xF4F4F6), HEX(0xD2D3D9)));
+}
+
+static void draw_textfile(cv_t *cv)
+{
+    doc_page(cv);
+    for (int i = 0; i < 7; i++)
+        line(cv, 9.6f, 11.5f + i * 2.4f, i == 6 ? 17 : 22.4f, 11.5f + i * 2.4f, 0.6f, solid(HEX(0xB2B5BC)));
+}
+
+static void landscape(cv_t *cv, float x, float y, float w, float h)
+{
+    rrect(cv, x, y, w, h, 0, vlin(y, y + h, HEX(0x5DB2FF), HEX(0xD4ECFF)));
+    clip(cv, x, y, w, h);
+    circle(cv, x + w * 0.76f, y + h * 0.28f, h * 0.16f, solid(HEX(0xFFD23A)));
+    ellipse(cv, x + w * 0.3f, y + h * 1.05f, w * 0.62f, h * 0.55f, vlin(y + h * 0.5f, y + h, HEX(0x7CD65E), HEX(0x2E9B2E)));
+    ellipse(cv, x + w * 0.95f, y + h * 1.1f, w * 0.5f, h * 0.45f, vlin(y + h * 0.6f, y + h, HEX(0x5CC145), HEX(0x1F7F28)));
+    unclip(cv);
+}
+
+static void draw_imagefile(cv_t *cv)
+{
+    soft_shadow(cv, 16, 27.4f, 12);
+    orrect(cv, 2.5f, 6, 27, 20.5f, 0.8f, HEX(0xC0C3CA), solid(HEX(0xFFFFFF)));
+    landscape(cv, 4.2f, 7.7f, 23.6f, 17.1f);
+}
+
+static void draw_drive(cv_t *cv)
+{
+    soft_shadow(cv, 16, 25.6f, 13);
+    const float top[] = { 5.4f, 8.8f, 26.6f, 8.8f, 29.2f, 13.6f, 2.8f, 13.6f };
+    poly(cv, top, 4, solid(HEX(0xA1A1A7)));
+    const float topin[] = { 5.4f + PX, 8.8f + PX, 26.6f - PX, 8.8f + PX, 29.2f - PX, 13.6f, 2.8f + PX, 13.6f };
+    poly(cv, topin, 4, vlin(9, 13.6f, HEX(0xFAFAFB), HEX(0xE2E2E6)));
+    orrect(cv, 2.8f, 13.2f, 26.4f, 11.4f, 1.4f, HEX(0x8E8E93), vlin(13, 24.6f, HEX(0xE8E8EC), HEX(0xB0B0B6)));
+    line(cv, 5.6f, 19.6f, 17.6f, 19.6f, 0.7f, solid(RGBA(0, 0, 0, 45)));
+    line(cv, 5.6f, 20.4f, 17.6f, 20.4f, 0.6f, solid(RGBA(255, 255, 255, 140)));
+    circle(cv, 25.2f, 18.8f, 0.9f, solid(HEX(0x34C759)));
+}
+
+static void draw_cdrom(cv_t *cv)
+{
+    soft_shadow(cv, 16, 28.8f, 10);
+    circle(cv, 16, 15.5f, 12.6f, solid(HEX(0x9AA3AF)));
+    circle(cv, 16, 15.5f, 12.6f - PX, lin(6, 4, 26, 27, HEX(0xF4F7FB), HEX(0xB6C1D0)));
+    ring(cv, 16, 15.5f, 10.4f, 1.6f, 0, 0, solid(RGBA(160, 120, 255, 70)));
+    ring(cv, 16, 15.5f, 7.6f, 1.4f, 0, 0, solid(RGBA(90, 200, 255, 80)));
+    circle(cv, 16, 15.5f, 3.6f, solid(HEX(0xD6DCE4)));
+    circle(cv, 16, 15.5f, 1.9f, erase());
 }
 
 static void draw_computer(cv_t *cv)
 {
-    shadow(cv, 16, 29.6f, 11);
-    monitor(cv, 2, 2.5f, 28, 21);
-    float sx = 5.4f, sy = 5.4f, sw = 21.2f, sh = 13.2f;
-    rrect(cv, sx, sy, sw, sh, 0.5f, vlin(sy, sy + sh, HEX(0x8AD0FF), HEX(0x1E63D6)));
+    const float stand[] = { 12.6f, 22.6f, 19.4f, 22.6f, 20.8f, 28.2f, 11.2f, 28.2f };
+    poly(cv, stand, 4, vlin(22, 28, HEX(0xCDCDD2), HEX(0x9A9AA0)));
+    rrect(cv, 10.4f, 27.6f, 11.2f, 1.6f, 0.7f, solid(HEX(0x8E8E93)));
+    orrect(cv, 2.2f, 4, 27.6f, 19.8f, 2.0f, HEX(0x98989E), vlin(4, 24, HEX(0xF5F5F7), HEX(0xD6D6DB)));
+    rrect(cv, 2.2f + PX, 18.8f, 27.6f - 2 * PX, 5.0f - PX, 1.6f, vlin(18, 24, HEX(0xE6E6EA), HEX(0xC2C2C8)));
+    float sx = 3.6f, sy = 5.4f, sw = 24.8f, sh = 12.8f;
+    rrect(cv, sx, sy, sw, sh, 0.6f, vlin(sy, sy + sh, HEX(0x7CC7FF), HEX(0x2F7BE6)));
     clip(cv, sx, sy, sw, sh);
-    ellipse(cv, 11, sy + sh + 3, 14, 8, vlin(sy + 7, sy + sh, HEX(0x8BE36A), HEX(0x2C9A2C)));
-    ellipse(cv, 26, sy + sh + 4, 10, 7, vlin(sy + 8, sy + sh, HEX(0x6FD456), HEX(0x22862A)));
-    poly(cv, (const float[]){ sx, sy, sx + sw * 0.7f, sy, sx, sy + sh * 0.9f }, 3, solid(RGBA(255, 255, 255, 55)));
+    ellipse(cv, 10, sy + sh + 3, 13, 7.4f, vlin(sy + 6, sy + sh, HEX(0x9BE07A), HEX(0x2F9A3A)));
+    ellipse(cv, 24, sy + sh + 4, 10, 7, vlin(sy + 7, sy + sh, HEX(0x7ED568), HEX(0x22862A)));
     unclip(cv);
-    circle(cv, 25.6f, 21.4f, 0.9f, solid(HEX(0x37D637)));
 }
 
-static void folder_back(cv_t *cv, float y)
+static void trash_can(cv_t *cv)
 {
-    orrect(cv, 2.5f, y, 12, 6, 1.5f, HEX(0xB8861B), solid(HEX(0xE9B23A)));
-    orrect(cv, 2.5f, y + 2.5f, 27, 21, 1.5f, HEX(0xB8861B), vlin(y, y + 22, HEX(0xF5CD62), HEX(0xE0A52C)));
-}
-
-static void folder_front(cv_t *cv, float y)
-{
-    const float front[] = { 1.5f, y + 8, 30.5f, y + 8, 29, y + 23.5f, 3, y + 23.5f };
-    poly(cv, front, 4, solid(HEX(0xBE8D22)));
-    const float inner[] = { 1.5f + PX * 1.2f, y + 8 + PX, 30.5f - PX * 1.2f, y + 8 + PX, 29 - PX, y + 23.5f - PX,
-                            3 + PX, y + 23.5f - PX };
-    poly(cv, inner, 4, vlin(y + 8, y + 23, HEX(0xFFE8A0), HEX(0xF3BF46)));
-    line(cv, 3, y + 9.6f, 29, y + 9.6f, 0.8f, solid(RGBA(255, 255, 255, 140)));
-}
-
-static void draw_folder(cv_t *cv)
-{
-    shadow(cv, 16, 29.8f, 12);
-    folder_back(cv, 4.5f);
-    folder_front(cv, 4.5f);
-}
-
-static void paper(cv_t *cv, float x, float y, float w, float h)
-{
-    orrect(cv, x, y, w, h, 0.6f, HEX(0x9AA3AD), vlin(y, y + h, HEX(0xFFFFFF), HEX(0xEDF1F5)));
-    for (float ly = y + 3; ly < y + h - 2; ly += 2.6f)
-        line(cv, x + 2.5f, ly, x + w - 2.5f, ly, 0.7f, solid(HEX(0xA9C3E3)));
-}
-
-static void draw_documents(cv_t *cv)
-{
-    shadow(cv, 16, 29.8f, 12);
-    folder_back(cv, 4.5f);
-    paper(cv, 8.5f, 2.5f, 17, 16);
-    paper(cv, 6, 4.5f, 17, 16);
-    folder_front(cv, 4.5f);
-}
-
-static void draw_recycle(cv_t *cv)
-{
-    shadow(cv, 16, 29.8f, 9.5f);
-    const float body[] = { 6, 8, 26, 8, 23.6f, 29, 8.4f, 29 };
-    poly(cv, body, 4, solid(HEX(0x5F7569)));
-    const float inner[] = { 6 + PX * 1.3f, 8, 26 - PX * 1.3f, 8, 23.6f - PX, 29 - PX, 8.4f + PX, 29 - PX };
-    poly(cv, inner, 4, lin(6, 0, 26, 0, HEX(0xF4FAF7), HEX(0x9FB8AB)));
-    for (int i = 0; i < 4; i++) {
-        float x0 = 10 + i * 4, x1 = 10.8f + i * 3.5f;
-        line(cv, x0, 11, x1, 27, 0.7f, solid(RGBA(70, 100, 85, 90)));
+    soft_shadow(cv, 16, 28.6f, 8.8f);
+    const float body[] = { 5.4f, 7.4f, 26.6f, 7.4f, 24.4f, 28, 7.6f, 28 };
+    poly(cv, body, 4, solid(HEX(0x98989E)));
+    const float in[] = { 5.4f + PX * 1.2f, 7.4f, 26.6f - PX * 1.2f, 7.4f, 24.4f - PX, 28 - PX, 7.6f + PX, 28 - PX };
+    poly(cv, in, 4, lin(6, 0, 26, 0, HEX(0xF7F7F9), HEX(0xCFCFD4)));
+    for (int i = 0; i < 6; i++) {
+        float t = (i + 1) / 7.0f;
+        float x0 = 5.4f + 21.2f * t, x1 = 7.6f + 16.8f * t;
+        line(cv, x0, 10, x1, 26, 0.7f, solid(RGBA(0, 0, 0, 30)));
+        line(cv, x0 + 0.7f, 10, x1 + 0.6f, 26, 0.5f, solid(RGBA(255, 255, 255, 170)));
     }
-    ellipse(cv, 16, 8, 10.6f, 2.6f, solid(HEX(0x5F7569)));
-    ellipse(cv, 16, 8, 10.6f - PX, 2.6f - PX, solid(HEX(0xE2EDE7)));
-    ellipse(cv, 16, 8, 8.6f, 1.6f, solid(HEX(0x86A193)));
-    /* recycling triangle */
-    const float tri[] = { 16, 12.2f, 21.8f, 22.4f, 10.2f, 22.4f };
-    poly(cv, tri, 3, solid(HEX(0x1F9A35)));
-    const float hole[] = { 16, 15.6f, 19.2f, 20.8f, 12.8f, 20.8f };
-    poly(cv, hole, 3, lin(6, 0, 26, 0, HEX(0xEDF6F1), HEX(0xB6CBBF)));
-    line(cv, 14.2f, 13.6f, 12.4f, 16.4f, 1.6f, solid(HEX(0x5FD46F)));
+    ellipse(cv, 16, 7.4f, 11.0f, 2.5f, solid(HEX(0x8E8E93)));
+    ellipse(cv, 16, 7.4f, 11.0f - PX, 2.5f - PX, solid(HEX(0xEDEDF0)));
 }
 
-static void window_frame(cv_t *cv, float x, float y, float w, float h, uint32_t body)
+static void draw_trash(cv_t *cv)
 {
-    orrect(cv, x, y, w, h, 1.5f, HEX(0x26344F), solid(body));
-    rrect(cv, x + PX, y + PX, w - 2 * PX, 4.6f, 1, vlin(y, y + 5, HEX(0x5C9BFA), HEX(0x1D57D6)));
+    trash_can(cv);
+    ellipse(cv, 16, 7.6f, 9.6f, 1.6f, vlin(6, 9.2f, HEX(0x58585D), HEX(0x8A8A90)));
 }
 
-static void draw_cmd(cv_t *cv)
+static void draw_trash_full(cv_t *cv)
 {
-    shadow(cv, 16, 29.6f, 12);
-    window_frame(cv, 2, 4, 28, 24, HEX(0x101010));
-    line(cv, 6, 13, 10, 15.8f, 1.6f, solid(HEX(0xD8D8D8)));
-    line(cv, 10, 15.8f, 6, 18.6f, 1.6f, solid(HEX(0xD8D8D8)));
-    line(cv, 12, 19.4f, 17.5f, 19.4f, 1.6f, solid(HEX(0xD8D8D8)));
+    trash_can(cv);
+    ellipse(cv, 16, 7.6f, 9.6f, 1.6f, solid(HEX(0x6E6E73)));
+    ellipse_rot(cv, 11.6f, 5.8f, 4.6f, 3.0f, -22, solid(HEX(0xBFC2C9)));
+    ellipse_rot(cv, 11.6f, 5.6f, 4.6f - PX, 3.0f - PX, -22, solid(HEX(0xFFFFFF)));
+    const float sheet[] = { 15.2f, 7.8f, 17.6f, 0.8f, 25.4f, 2.4f, 23.4f, 8.6f };
+    poly(cv, sheet, 4, solid(HEX(0xBFC2C9)));
+    const float sheet2[] = { 15.8f + PX, 7.6f, 18.0f, 1.4f, 24.6f, 2.8f, 22.8f, 8.2f };
+    poly(cv, sheet2, 4, vlin(1, 8, HEX(0xFFFFFF), HEX(0xE8E8EC)));
+    line(cv, 18.6f, 3.6f, 22.8f, 4.4f, 0.5f, solid(HEX(0xB4B6BD)));
+    line(cv, 18.2f, 5.2f, 22.4f, 6.0f, 0.5f, solid(HEX(0xB4B6BD)));
 }
 
-static void draw_notepad(cv_t *cv)
+/* ---- app icons ---- */
+
+static void draw_finder(cv_t *cv)
 {
-    shadow(cv, 16, 29.8f, 10.5f);
-    orrect(cv, 6, 3.5f, 21, 25.5f, 1, HEX(0x6E7B8B), vlin(3, 29, HEX(0xFFFFFF), HEX(0xE6ECF3)));
-    rrect(cv, 6 + PX, 3.5f + PX, 21 - 2 * PX, 4.5f, 0.8f, vlin(3, 8, HEX(0x9CCBFA), HEX(0x3A79D2)));
-    for (int i = 0; i < 5; i++)
-        rrect(cv, 8.6f + i * 4, 1.6f, 1.6f, 4, 0.8f, solid(HEX(0x3A424C)));
-    for (int i = 0; i < 6; i++)
-        line(cv, 9, 11.5f + i * 3, i == 5 ? 18 : 24, 11.5f + i * 3, 0.8f, solid(HEX(0x7FA7D9)));
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0x8FDDFF), HEX(0x38A6F5));
+    const float face[] = { 18.6f, 0, 32, 0, 32, 32, 16.4f, 32, 16.4f, 20.4f, 13.2f, 19.6f, 14.8f, 16.4f, 17.8f, 9.0f };
+    poly(&l, face, 8, vlin(SQ_Y, SQ_Y + SQ_S, HEX(0x3A8CFB), HEX(0x1550D6)));
+    rrect(&l, 9.3f, 8.6f, 2.4f, 6.0f, 1.2f, solid(HEX(0x10162A)));
+    rrect(&l, 21.0f, 8.6f, 2.4f, 6.0f, 1.2f, solid(HEX(0x10162A)));
+    ring_ex(&l, 16, 17.6f, 8.6f, 5.4f, 1.5f, 0, 1, 0, 0, solid(HEX(0x10162A)));
+    squircle_merge(cv, &l);
 }
 
-static void draw_calc(cv_t *cv)
+static void draw_launchpad(cv_t *cv)
 {
-    shadow(cv, 16, 29.8f, 10.5f);
-    orrect(cv, 5, 2, 22, 27.5f, 2.5f, HEX(0x47505B), vlin(2, 30, HEX(0xF3F5F7), HEX(0xB3BCC6)));
-    orrect(cv, 7.6f, 4.6f, 16.8f, 6.2f, 1, HEX(0x5D7A57), vlin(4, 11, HEX(0xDDF2D6), HEX(0xB8D9AE)));
-    line(cv, 16.5f, 7.7f, 22, 7.7f, 1.4f, solid(HEX(0x2F3F2C)));
-    for (int r = 0; r < 4; r++)
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0x737378), HEX(0x2C2C2E));
+    static const uint32_t c[9] = { 0xFF453A, 0xFF9F0A, 0xFFD60A, 0x32D74B, 0x64D2FF, 0x0A84FF, 0xBF5AF2, 0xFF375F, 0xE5E5EA };
+    for (int i = 0; i < 9; i++) {
+        float x = 7.2f + (i % 3) * 6.4f, y = 6.6f + (i / 3) * 6.4f;
+        rrect(&l, x, y, 5.2f, 5.2f, 1.5f, vlin(y, y + 5.2f, color_shade(HEX(c[i]), 118), HEX(c[i])));
+    }
+    squircle_merge(cv, &l);
+}
+
+static void draw_terminal(cv_t *cv)
+{
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0xF4F4F6), HEX(0xB4B4BA));
+    rrect(&l, 5.4f, 5.0f, 21.2f, 19.4f, 2.2f, solid(HEX(0x56565A)));
+    rrect(&l, 5.9f, 5.5f, 20.2f, 18.4f, 1.8f, vlin(5, 24, HEX(0x2E2E30), HEX(0x111113)));
+    line(&l, 9, 10.2f, 12.6f, 13.0f, 1.7f, solid(HEX(0xF2F2F2)));
+    line(&l, 12.6f, 13.0f, 9, 15.8f, 1.7f, solid(HEX(0xF2F2F2)));
+    line(&l, 14.2f, 16.2f, 19, 16.2f, 1.7f, solid(HEX(0xF2F2F2)));
+    squircle_merge(cv, &l);
+}
+
+static void draw_notes(cv_t *cv)
+{
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0xFFFFFF), HEX(0xEEEEF0));
+    rrect(&l, 0, 0, 32, 10.4f, 0, vlin(2, 10.4f, HEX(0xFFE57E), HEX(0xF8C134)));
+    for (float x = 4.8f; x < 28; x += 2.2f)
+        circle(&l, x, 11.8f, 0.45f, solid(HEX(0xB9B9BE)));
+    for (int i = 0; i < 4; i++)
+        line(&l, 3, 15.6f + i * 3.6f, 29, 15.6f + i * 3.6f, 0.6f, solid(HEX(0xD6D6DA)));
+    squircle_merge(cv, &l);
+}
+
+static void draw_calculator(cv_t *cv)
+{
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0x5C5C61), HEX(0x28282B));
+    rrect(&l, 15.6f, 6.2f, 9.2f, 3.2f, 1.6f, solid(RGBA(255, 255, 255, 235)));
+    for (int r = 0; r < 3; r++)
         for (int c = 0; c < 4; c++) {
-            uint32_t col = c == 3 ? HEX(0xF08A4B) : HEX(0xFFFFFF);
-            orrect(cv, 7.6f + c * 4.3f, 12.8f + r * 4, 3.4f, 3.1f, 0.8f, HEX(0x6D7783), solid(col));
+            uint32_t col = c == 3 ? HEX(0xFF9F0A) : r == 0 ? HEX(0xBDBDC2) : HEX(0x7C7C82);
+            float cx = 8.6f + c * 4.9f, cy = 14.0f + r * 4.9f;
+            circle(&l, cx, cy, 2.1f, vlin(cy - 2, cy + 2, color_shade(col, 115), col));
         }
+    squircle_merge(cv, &l);
 }
 
 static void draw_paint(cv_t *cv)
 {
-    shadow(cv, 15, 29.6f, 12);
-    ellipse_rot(cv, 14.5f, 17, 13, 9.5f, -12, solid(HEX(0x9A7B4F)));
-    ellipse_rot(cv, 14.5f, 17, 13 - PX, 9.5f - PX, -12, vlin(8, 27, HEX(0xFDEFD2), HEX(0xE0BF8A)));
-    ellipse(cv, 9.6f, 21.8f, 2.4f, 1.9f, erase());
-    static const uint32_t blobs[] = { 0xE53935, 0xFDD835, 0x43A047, 0x1E88E5, 0x8E24AA };
-    static const float bx[] = { 7.6f, 12.4f, 18, 22.6f, 20.4f }, by[] = { 15.6f, 11.6f, 10.6f, 14.4f, 20.6f };
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0xFFFFFF), HEX(0xD6E4F4));
+    ellipse_rot(&l, 15, 16.4f, 10.8f, 8.0f, -14, solid(HEX(0xA27C4B)));
+    ellipse_rot(&l, 15, 16.4f, 10.8f - PX, 8.0f - PX, -14, vlin(8, 25, HEX(0xFBE6C0), HEX(0xE0B97C)));
+    ellipse(&l, 10.4f, 20.4f, 2.0f, 1.6f, solid(HEX(0xE6EEF8)));
+    static const uint32_t blobs[] = { 0xFF453A, 0xFFD60A, 0x32D74B, 0x0A84FF, 0xBF5AF2 };
+    static const float bx[] = { 8.6f, 12.4f, 17.4f, 21.6f, 20.0f }, by[] = { 15.2f, 11.8f, 11.0f, 13.8f, 19.0f };
     for (int i = 0; i < 5; i++)
-        circle(cv, bx[i], by[i], 2.1f, rad(bx[i] - 0.7f, by[i] - 0.7f, 2.6f, color_shade(HEX(blobs[i]), 140), HEX(blobs[i])));
-    line(cv, 17, 26, 29, 4, 2.2f, lin(17, 26, 29, 4, HEX(0xB0702E), HEX(0x6E4219)));
-    line(cv, 15.6f, 28.4f, 17.6f, 24.8f, 2.8f, solid(HEX(0xAEB6BF)));
-    circle(cv, 15, 29.2f, 1.6f, solid(HEX(0x1E3A8A)));
+        circle(&l, bx[i], by[i], 1.9f, rad(bx[i] - 0.6f, by[i] - 0.6f, 2.3f, color_shade(HEX(blobs[i]), 140), HEX(blobs[i])));
+    line(&l, 17.6f, 24.6f, 26.6f, 6.6f, 1.9f, lin(17, 25, 27, 7, HEX(0xB0702E), HEX(0x6E4219)));
+    line(&l, 16.4f, 26.8f, 17.9f, 24.0f, 2.5f, solid(HEX(0xAEB6BF)));
+    circle(&l, 16.0f, 27.4f, 1.3f, solid(HEX(0x1E3A8A)));
+    squircle_merge(cv, &l);
+}
+
+static void draw_preview(cv_t *cv)
+{
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0xEFF5FC), HEX(0xB6CAE2));
+    const float back[] = { 7.4f, 8.4f, 23.4f, 5.4f, 26.2f, 19.8f, 10.2f, 22.8f };
+    poly(&l, back, 4, solid(HEX(0xD0D6DE)));
+    rrect(&l, 5.6f, 8.6f, 19.8f, 15.4f, 0.8f, solid(HEX(0x98A1AD)));
+    rrect(&l, 5.6f + PX, 8.6f + PX, 19.8f - 2 * PX, 15.4f - 2 * PX, 0.6f, solid(HEX(0xFFFFFF)));
+    landscape(&l, 7.0f, 10.0f, 17.0f, 12.6f);
+    circle(&l, 22.4f, 21.4f, 3.0f, solid(RGBA(210, 236, 255, 170)));
+    ring(&l, 22.4f, 21.4f, 4.2f, 1.4f, 0, 0, solid(HEX(0x3A3A3C)));
+    line(&l, 25.4f, 24.4f, 28.2f, 27.2f, 2.1f, solid(HEX(0x3A3A3C)));
+    squircle_merge(cv, &l);
 }
 
 static void mine(cv_t *cv, float cx, float cy, float r)
@@ -549,152 +1021,71 @@ static void mine(cv_t *cv, float cx, float cy, float r)
 
 static void draw_mines(cv_t *cv)
 {
-    shadow(cv, 16, 29.8f, 10);
-    mine(cv, 16, 15.5f, 8);
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0xE6E9EE), HEX(0xA6ADB8));
+    for (int i = 1; i < 5; i++) {
+        line(&l, 3 + i * 5.2f, 0, 3 + i * 5.2f, 32, 0.5f, solid(RGBA(255, 255, 255, 130)));
+        line(&l, 0, 2.4f + i * 5.2f, 32, 2.4f + i * 5.2f, 0.5f, solid(RGBA(255, 255, 255, 130)));
+    }
+    mine(&l, 16, 15.4f, 6.4f);
+    squircle_merge(cv, &l);
 }
 
-static void draw_taskmgr(cv_t *cv)
+static void draw_activity(cv_t *cv)
 {
-    shadow(cv, 16, 29.6f, 11);
-    monitor(cv, 2, 2.5f, 28, 21);
-    rrect(cv, 5.4f, 5.4f, 21.2f, 13.2f, 0.5f, solid(HEX(0x000000)));
-    for (int i = 1; i < 4; i++)
-        line(cv, 5.6f, 5.4f + i * 3.3f, 26.4f, 5.4f + i * 3.3f, 0.5f, solid(HEX(0x0B5A0B)));
-    static const float gx[] = { 6, 9.5f, 12.5f, 15.5f, 18.5f, 21.5f, 25.5f }, gy[] = { 16, 13, 15, 8.5f, 12, 9.5f, 11 };
-    for (int i = 0; i < 6; i++)
-        line(cv, gx[i], gy[i], gx[i + 1], gy[i + 1], 1.2f, solid(HEX(0x39F039)));
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0x3A3A3C), HEX(0x0E0E10));
+    for (int i = 1; i < 6; i++)
+        line(&l, 0, 2.4f + i * 4.4f, 32, 2.4f + i * 4.4f, 0.45f, solid(RGBA(76, 217, 100, 64)));
+    static const float gx[] = { 3, 9, 11.5f, 14, 16.5f, 19, 22, 29 }, gy[] = { 17, 17, 9.5f, 23, 12, 18.5f, 15.5f, 15.5f };
+    for (int i = 0; i < 7; i++)
+        line(&l, gx[i], gy[i], gx[i + 1], gy[i + 1], 1.5f, solid(HEX(0x4CD964)));
+    squircle_merge(cv, &l);
 }
 
-static void landscape(cv_t *cv, float x, float y, float w, float h)
+static void gear(cv_t *cv, float cx, float cy, float r)
 {
-    rrect(cv, x, y, w, h, 0, vlin(y, y + h, HEX(0x5DB2FF), HEX(0xD4ECFF)));
-    clip(cv, x, y, w, h);
-    circle(cv, x + w * 0.76f, y + h * 0.28f, h * 0.16f, solid(HEX(0xFFD23A)));
-    ellipse(cv, x + w * 0.3f, y + h * 1.05f, w * 0.62f, h * 0.55f, vlin(y + h * 0.5f, y + h, HEX(0x7CD65E), HEX(0x2E9B2E)));
-    ellipse(cv, x + w * 0.95f, y + h * 1.1f, w * 0.5f, h * 0.45f, vlin(y + h * 0.6f, y + h, HEX(0x5CC145), HEX(0x1F7F28)));
-    unclip(cv);
+    paint_t metal = vlin(cy - r, cy + r, HEX(0xF7F7F9), HEX(0xB4B4BA));
+    for (int k = 0; k < 12; k++) {
+        float a = k * PI / 6 + PI / 12;
+        float c = fcos(a), s = fsin(a);
+        line(cv, cx + c * r * 0.72f, cy + s * r * 0.72f, cx + c * r * 1.02f, cy + s * r * 1.02f, r * 0.3f, metal);
+    }
+    circle(cv, cx, cy, r * 0.86f, metal);
+    circle(cv, cx, cy, r * 0.58f, vlin(cy - r, cy + r, HEX(0x5E5E63), HEX(0x8E8E93)));
+    circle(cv, cx, cy, r * 0.38f, vlin(cy - r, cy + r, HEX(0xE8E8EC), HEX(0xA6A6AC)));
 }
 
-static void draw_pictures(cv_t *cv)
+static void draw_sysprefs(cv_t *cv)
 {
-    shadow(cv, 16, 29.6f, 12);
-    orrect(cv, 2.5f, 4.5f, 27, 22, 1, HEX(0x6B6B6B), solid(HEX(0xFFFFFF)));
-    landscape(cv, 4.6f, 6.6f, 22.8f, 17.8f);
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0x98989E), HEX(0x46464A));
+    gear(&l, 16, 15.4f, 9.6f);
+    squircle_merge(cv, &l);
 }
 
-static void badge(cv_t *cv, uint32_t light, uint32_t dark, uint32_t edge)
+static void draw_spotlight(cv_t *cv)
 {
-    ocircle(cv, 16, 16, 14, edge, lin(10, 3, 22, 29, light, dark));
-    ellipse(cv, 16, 9.5f, 9.5f, 6, vlin(3, 15, RGBA(255, 255, 255, 150), RGBA(255, 255, 255, 0)));
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0xFBFBFD), HEX(0xC6CAD2));
+    circle(&l, 14, 13.6f, 5.0f, solid(RGBA(10, 132, 255, 40)));
+    ring(&l, 14, 13.6f, 6.8f, 2.2f, 0, 0, solid(HEX(0x3A3A3C)));
+    line(&l, 19.0f, 18.6f, 24.2f, 23.8f, 2.8f, solid(HEX(0x3A3A3C)));
+    squircle_merge(cv, &l);
 }
 
-static void draw_help(cv_t *cv)
+static void draw_sysinfo(cv_t *cv)
 {
-    badge(cv, HEX(0x7FBFFF), HEX(0x1A58D0), HEX(0x1747A6));
-    glyph_text(cv, "?", HEX(0xFFFFFF));
-}
-
-static void draw_info(cv_t *cv)
-{
-    badge(cv, HEX(0x7FBFFF), HEX(0x1A58D0), HEX(0x1747A6));
-    rrect(cv, 14.4f, 13.5f, 3.2f, 10.5f, 0.8f, solid(HEX(0xFFFFFF)));
-    circle(cv, 16, 9.5f, 2, solid(HEX(0xFFFFFF)));
-}
-
-static void draw_error(cv_t *cv)
-{
-    badge(cv, HEX(0xFF8A70), HEX(0xD02A0E), HEX(0x9E1C06));
-    line(cv, 11, 11, 21, 21, 3, solid(HEX(0xFFFFFF)));
-    line(cv, 21, 11, 11, 21, 3, solid(HEX(0xFFFFFF)));
-}
-
-static void draw_warning(cv_t *cv)
-{
-    const float tri[] = { 16, 2.5f, 30.5f, 28.5f, 1.5f, 28.5f };
-    poly(cv, tri, 3, solid(HEX(0xA67C00)));
-    const float in[] = { 16, 2.5f + PX * 2.2f, 30.5f - PX * 1.8f, 28.5f - PX, 1.5f + PX * 1.8f, 28.5f - PX };
-    poly(cv, in, 3, vlin(3, 29, HEX(0xFFE77A), HEX(0xF2B705)));
-    rrect(cv, 14.6f, 10, 2.8f, 11, 1.2f, solid(HEX(0x1A1A1A)));
-    circle(cv, 16, 24.4f, 1.7f, solid(HEX(0x1A1A1A)));
-}
-
-static void draw_display(cv_t *cv)
-{
-    shadow(cv, 16, 29.6f, 11);
-    monitor(cv, 2, 2.5f, 28, 21);
-    static const uint32_t sw[] = { 0xE53935, 0xFDD835, 0x43A047, 0x1E88E5 };
-    rrect(cv, 5.4f, 5.4f, 21.2f, 13.2f, 0.5f, solid(HEX(0xFFFFFF)));
-    for (int i = 0; i < 4; i++)
-        rrect(cv, 6.6f + (i % 2) * 10, 6.5f + (i / 2) * 6, 8.8f, 5, 0.6f, solid(HEX(sw[i])));
-}
-
-static void draw_run(cv_t *cv)
-{
-    shadow(cv, 16, 29.6f, 12);
-    window_frame(cv, 6, 3, 23, 19, HEX(0xFFFFFF));
-    line(cv, 9, 12, 25, 12, 0.8f, solid(HEX(0xB8C4D2)));
-    line(cv, 9, 15, 22, 15, 0.8f, solid(HEX(0xB8C4D2)));
-    /* green arrow coming in from the lower left */
-    line(cv, 3, 27, 12, 18, 3, solid(HEX(0x1E7A1E)));
-    line(cv, 3.4f, 26.6f, 11.6f, 18.4f, 1.8f, solid(HEX(0x5FD35F)));
-    const float head[] = { 15.5f, 14.5f, 15.5f, 23, 7, 14.5f };
-    poly(cv, head, 3, solid(HEX(0x1E7A1E)));
-    const float head2[] = { 14.4f, 16, 14.4f, 21, 9.4f, 16 };
-    poly(cv, head2, 3, solid(HEX(0x5FD35F)));
-}
-
-static void tile(cv_t *cv, uint32_t light, uint32_t dark, uint32_t edge)
-{
-    orrect(cv, 1, 1, 30, 30, 5, edge, lin(4, 2, 26, 30, light, dark));
-    rrect(cv, 2.5f, 2.5f, 27, 12, 4, vlin(2, 15, RGBA(255, 255, 255, 120), RGBA(255, 255, 255, 0)));
-}
-
-static void power_glyph(cv_t *cv, float cx, float cy, float r, float w)
-{
-    ring(cv, cx, cy, r, w, -125, -55, solid(HEX(0xFFFFFF)));
-    line(cv, cx, cy - r - 0.6f, cx, cy - 1, w, solid(HEX(0xFFFFFF)));
-}
-
-static void draw_logoff(cv_t *cv)
-{
-    tile(cv, HEX(0xFFD86A), HEX(0xE07F00), HEX(0xA85E00));
-    ring(cv, 11, 16, 5.2f, 2.4f, 0, 0, solid(HEX(0xFFFFFF)));
-    line(cv, 15.6f, 16, 26, 16, 2.6f, solid(HEX(0xFFFFFF)));
-    line(cv, 22, 16, 22, 20.5f, 2.2f, solid(HEX(0xFFFFFF)));
-    line(cv, 25.4f, 16, 25.4f, 19.5f, 2.2f, solid(HEX(0xFFFFFF)));
-}
-
-static void draw_power(cv_t *cv)
-{
-    tile(cv, HEX(0xFF9474), HEX(0xC92D0D), HEX(0x8F1E05));
-    power_glyph(cv, 16, 17, 8.4f, 2.8f);
-}
-
-static void draw_standby(cv_t *cv)
-{
-    tile(cv, HEX(0xFFE16E), HEX(0xE09A00), HEX(0xA06A00));
-    power_glyph(cv, 16, 17, 8.4f, 2.8f);
-}
-
-static void draw_restart(cv_t *cv)
-{
-    tile(cv, HEX(0x8EE36A), HEX(0x2C9A20), HEX(0x1C6A12));
-    ring(cv, 16, 16.5f, 8.4f, 2.8f, -80, -15, solid(HEX(0xFFFFFF)));
-    const float head[] = { 19.2f, 4.6f, 25.6f, 9.6f, 18.2f, 12.6f };
-    poly(cv, head, 3, solid(HEX(0xFFFFFF)));
-}
-
-static void person(cv_t *cv, float cx, float cy, float s, uint32_t c)
-{
-    circle(cv, cx, cy - 4.2f * s, 3.2f * s, solid(c));
-    rrect(cv, cx - 5 * s, cy, 10 * s, 8 * s, 4.5f * s, solid(c));
-}
-
-static void draw_switchuser(cv_t *cv)
-{
-    tile(cv, HEX(0x8EE36A), HEX(0x2C9A20), HEX(0x1C6A12));
-    person(cv, 12, 14, 0.9f, RGBA(255, 255, 255, 180));
-    person(cv, 19, 17, 1.0f, HEX(0xFFFFFF));
+    cv_t l = layer_new(cv);
+    backdrop(&l, HEX(0x6E6CF0), HEX(0x3533A0));
+    for (int i = 0; i < 4; i++) {
+        float p = 10.2f + i * 3.9f;
+        line(&l, p, 5.6f, p, 25.2f, 1.1f, solid(HEX(0xD8D8E0)));
+        line(&l, 6.2f, p - 0.6f, 25.8f, p - 0.6f, 1.1f, solid(HEX(0xD8D8E0)));
+    }
+    rrect(&l, 8.6f, 8.0f, 14.8f, 14.8f, 2, vlin(8, 23, HEX(0x4A4A4E), HEX(0x1C1C1E)));
+    rrect(&l, 12.2f, 11.6f, 7.6f, 7.6f, 1.2f, vlin(11, 19, HEX(0x8E8E93), HEX(0x5A5A5F)));
+    squircle_merge(cv, &l);
 }
 
 static void draw_kepler(cv_t *cv)
@@ -712,120 +1103,124 @@ static void draw_kepler(cv_t *cv)
     circle(cv, 27.4f, 9.2f, 2.1f, rad(26.8f, 8.6f, 2.6f, HEX(0xFFFFFF), HEX(0x9FD4FF)));
 }
 
-static void arrow_badge(cv_t *cv, int dir)
+static void draw_guest(cv_t *cv)
 {
-    ocircle(cv, 16, 16, 13.5f, HEX(0x1C6E1C), lin(10, 3, 22, 29, HEX(0x8BE36B), HEX(0x2A9128)));
-    ellipse(cv, 16, 10, 9, 5.5f, vlin(3, 15, RGBA(255, 255, 255, 140), RGBA(255, 255, 255, 0)));
-    float s = dir > 0 ? 1 : -1;
-    line(cv, 16 - 6 * s, 16, 16 + 3 * s, 16, 3.4f, solid(HEX(0xFFFFFF)));
-    const float head[] = { 16 + 8.5f * s, 16, 16 + 1.5f * s, 9, 16 + 1.5f * s, 23 };
-    poly(cv, head, 3, solid(HEX(0xFFFFFF)));
+    cv_t l = layer_new(cv);
+    rrect(&l, 0, 0, 32, 32, 0, vlin(0, 32, HEX(0xBDBDC2), HEX(0x8A8A90)));
+    circle(&l, 16, 12.4f, 5.8f, solid(HEX(0xF4F4F6)));
+    ellipse(&l, 16, 29.4f, 11, 9.2f, solid(HEX(0xF4F4F6)));
+    shape_t m = { 0 };
+    m.kind = SH_ELLIPSE;
+    m.cx = U(cv, 16);
+    m.cy = U(cv, 16);
+    m.rx = m.ry = U(cv, 16);
+    m.cosa = 1024;
+    layer_merge(cv, &l, &m);
 }
 
-static void draw_allprogs(cv_t *cv) { arrow_badge(cv, 1); }
-static void draw_back(cv_t *cv) { arrow_badge(cv, -1); }
-static void draw_forward(cv_t *cv) { arrow_badge(cv, 1); }
+/* ---- alert badges ---- */
+
+static void flat_badge(cv_t *cv, uint32_t top, uint32_t bottom)
+{
+    soft_shadow(cv, 16, 29.6f, 10);
+    circle(cv, 16, 15.6f, 13.6f, vlin(2, 29, top, bottom));
+}
+
+static void draw_help(cv_t *cv)
+{
+    flat_badge(cv, HEX(0x5AAEFF), HEX(0x0A64DE));
+    glyph_text(cv, "?", HEX(0xFFFFFF));
+}
+
+static void draw_info(cv_t *cv)
+{
+    flat_badge(cv, HEX(0x5AAEFF), HEX(0x0A64DE));
+    rrect(cv, 14.4f, 13.4f, 3.2f, 10.2f, 1.6f, solid(HEX(0xFFFFFF)));
+    circle(cv, 16, 9.2f, 2, solid(HEX(0xFFFFFF)));
+}
+
+static void draw_error(cv_t *cv)
+{
+    flat_badge(cv, HEX(0xFF7A70), HEX(0xD92D20));
+    line(cv, 11.2f, 10.8f, 20.8f, 20.4f, 3, solid(HEX(0xFFFFFF)));
+    line(cv, 20.8f, 10.8f, 11.2f, 20.4f, 3, solid(HEX(0xFFFFFF)));
+}
+
+static void draw_warning(cv_t *cv)
+{
+    soft_shadow(cv, 16, 29.6f, 12);
+    line(cv, 16, 4.6f, 4.4f, 25.6f, 4.6f, solid(HEX(0xE8A300)));
+    line(cv, 16, 4.6f, 27.6f, 25.6f, 4.6f, solid(HEX(0xE8A300)));
+    line(cv, 4.4f, 25.6f, 27.6f, 25.6f, 4.6f, solid(HEX(0xE8A300)));
+    const float tri[] = { 16, 4.6f, 27.6f, 25.6f, 4.4f, 25.6f };
+    poly(cv, tri, 3, vlin(3, 28, HEX(0xFFDD55), HEX(0xF5B400)));
+    rrect(cv, 14.6f, 10.6f, 2.8f, 9.4f, 1.4f, solid(HEX(0x2A2A2A)));
+    circle(cv, 16, 23.0f, 1.7f, solid(HEX(0x2A2A2A)));
+}
+
+/* ---- the old Luna pieces some screens still ask for ---- */
+
+static void tile(cv_t *cv, uint32_t light, uint32_t dark, uint32_t edge)
+{
+    orrect(cv, 1, 1, 30, 30, 7, edge, lin(4, 2, 26, 30, light, dark));
+}
+
+static void draw_power(cv_t *cv)
+{
+    tile(cv, HEX(0xFF8A70), HEX(0xD92D20), HEX(0xB02418));
+    g_power(cv);
+}
+
+static void draw_standby(cv_t *cv)
+{
+    tile(cv, HEX(0xFFD86A), HEX(0xE89B00), HEX(0xB57A00));
+    g_sleep(cv);
+}
+
+static void draw_restart(cv_t *cv)
+{
+    tile(cv, HEX(0x7EDB6E), HEX(0x28A745), HEX(0x1E7E34));
+    g_restart(cv);
+}
+
+static void draw_logoff(cv_t *cv)
+{
+    tile(cv, HEX(0x8AC4FF), HEX(0x0A64DE), HEX(0x0850B0));
+    g_person(cv);
+}
 
 static void draw_up(cv_t *cv)
 {
-    draw_folder(cv);
-    line(cv, 16, 26, 16, 14, 3.6f, solid(HEX(0x1C6E1C)));
-    line(cv, 16, 25.4f, 16, 14.6f, 2, solid(HEX(0x5FD35F)));
-    const float head[] = { 16, 7.5f, 23, 15.5f, 9, 15.5f };
-    poly(cv, head, 3, solid(HEX(0x1C6E1C)));
-    const float head2[] = { 16, 9.6f, 20.6f, 14.6f, 11.4f, 14.6f };
-    poly(cv, head2, 3, solid(HEX(0x5FD35F)));
+    folder(cv);
+    emboss(cv, g_chevron_l);
 }
 
-static void draw_textfile(cv_t *cv)
+static void arrow_badge(cv_t *cv, int dir)
 {
-    shadow(cv, 16, 29.8f, 10);
-    const float page[] = { 6.5f, 2.5f, 20.5f, 2.5f, 26.5f, 8.5f, 26.5f, 29, 6.5f, 29 };
-    poly(cv, page, 5, solid(HEX(0x7C8794)));
-    const float inner[] = { 6.5f + PX, 2.5f + PX, 20.5f - PX * 0.4f, 2.5f + PX, 26.5f - PX, 8.5f + PX * 0.4f,
-                            26.5f - PX, 29 - PX, 6.5f + PX, 29 - PX };
-    poly(cv, inner, 5, vlin(2, 29, HEX(0xFFFFFF), HEX(0xEEF2F6)));
-    const float fold[] = { 20.5f, 2.5f, 20.5f, 8.5f, 26.5f, 8.5f };
-    poly(cv, fold, 3, vlin(2, 9, HEX(0xF4F6F8), HEX(0xC5CDD6)));
-    for (int i = 0; i < 6; i++)
-        line(cv, 9.5f, 12 + i * 2.8f, i == 5 ? 18 : 23.5f, 12 + i * 2.8f, 0.8f, solid(HEX(0x98A4B2)));
+    flat_badge(cv, HEX(0xF2F2F4), HEX(0xD1D1D6));
+    float s = dir > 0 ? 1 : -1;
+    line(cv, 16 - 6 * s, 16, 16 + 3 * s, 16, 3.0f, solid(HEX(0x3A3A3C)));
+    const float head[] = { 16 + 8.5f * s, 16, 16 + 1.5f * s, 9, 16 + 1.5f * s, 23 };
+    poly(cv, head, 3, solid(HEX(0x3A3A3C)));
 }
 
-static void drive_box(cv_t *cv, float y)
-{
-    shadow(cv, 16, y + 13.5f, 13);
-    orrect(cv, 2.5f, y, 27, 12, 1.6f, HEX(0x56606B), vlin(y, y + 12, HEX(0xF7F9FB), HEX(0xAAB3BD)));
-    rrect(cv, 2.5f + PX, y + 7.6f, 27 - 2 * PX, 4.4f - PX, 1, vlin(y + 7, y + 12, HEX(0x9AA4AF), HEX(0x6F7A86)));
-    circle(cv, 25.2f, y + 9.8f, 1, solid(HEX(0x37E037)));
-}
-
-static void draw_drive(cv_t *cv)
-{
-    drive_box(cv, 12);
-    line(cv, 5, 14.5f, 18, 14.5f, 0.8f, solid(RGBA(255, 255, 255, 200)));
-}
-
-static void draw_cdrom(cv_t *cv)
-{
-    circle(cv, 16, 11.5f, 9.5f, lin(8, 3, 24, 20, HEX(0xF2F6FB), HEX(0xA8B7CB)));
-    ring(cv, 16, 11.5f, 7.6f, 1.2f, 0, 0, solid(RGBA(140, 120, 255, 70)));
-    ring(cv, 16, 11.5f, 5.2f, 1.0f, 0, 0, solid(RGBA(90, 200, 255, 70)));
-    circle(cv, 16, 11.5f, 2.2f, erase());
-    drive_box(cv, 16);
-}
-
-static void draw_speaker(cv_t *cv)
-{
-    const float body[] = { 3, 12, 9, 12, 16, 5, 16, 27, 9, 20, 3, 20 };
-    poly(cv, body, 6, solid(HEX(0x4A5562)));
-    const float in[] = { 3 + PX, 12 + PX, 9 + PX * 0.5f, 12 + PX, 16 - PX, 5 + PX * 2, 16 - PX, 27 - PX * 2,
-                         9 + PX * 0.5f, 20 - PX, 3 + PX, 20 - PX };
-    poly(cv, in, 6, lin(3, 0, 16, 0, HEX(0xFFFFFF), HEX(0xC9D2DC)));
-    ring(cv, 16, 16, 7, 2, 60, 300, solid(HEX(0xFFFFFF)));
-    ring(cv, 16, 16, 12, 2, 55, 305, solid(HEX(0xFFFFFF)));
-}
-
-static void draw_network(cv_t *cv)
-{
-    orrect(cv, 2, 4, 17, 13, 1.5f, HEX(0x2D3A4A), vlin(4, 17, HEX(0xF5F7FA), HEX(0xB8C1CB)));
-    rrect(cv, 4.5f, 6.5f, 12, 7.5f, 0.5f, vlin(6, 14, HEX(0x8AD0FF), HEX(0x2A6FDA)));
-    orrect(cv, 13, 13, 17, 13, 1.5f, HEX(0x2D3A4A), vlin(13, 26, HEX(0xF5F7FA), HEX(0xB8C1CB)));
-    rrect(cv, 15.5f, 15.5f, 12, 7.5f, 0.5f, vlin(15, 23, HEX(0x8AD0FF), HEX(0x2A6FDA)));
-    rrect(cv, 18, 26, 7, 3, 0.5f, solid(HEX(0x5A6572)));
-}
-
-static void draw_showdesktop(cv_t *cv)
-{
-    orrect(cv, 2, 5, 28, 21, 1.5f, HEX(0x3D4A5A), solid(HEX(0xFFFFFF)));
-    landscape(cv, 3.5f, 6.5f, 25, 18);
-    line(cv, 21, 27, 29, 19, 2.4f, solid(HEX(0xF1C232)));
-    line(cv, 20, 28, 21.4f, 26.6f, 2.4f, solid(HEX(0x333333)));
-}
-
-static void draw_sysinfo(cv_t *cv)
-{
-    draw_computer(cv);
-    ocircle(cv, 24, 23, 7, HEX(0x1747A6), lin(18, 16, 30, 30, HEX(0x7FBFFF), HEX(0x1A58D0)));
-    rrect(cv, 23, 22, 2.2f, 5.5f, 0.6f, solid(HEX(0xFFFFFF)));
-    circle(cv, 24.1f, 19.6f, 1.3f, solid(HEX(0xFFFFFF)));
-}
-
-typedef void (*icon_fn)(cv_t *cv);
+static void draw_back(cv_t *cv) { arrow_badge(cv, -1); }
+static void draw_forward(cv_t *cv) { arrow_badge(cv, 1); }
 
 static const icon_fn icon_fns[ICON_COUNT] = {
     [ICON_COMPUTER] = draw_computer,
     [ICON_DOCUMENTS] = draw_documents,
-    [ICON_RECYCLE] = draw_recycle,
-    [ICON_CMD] = draw_cmd,
-    [ICON_NOTEPAD] = draw_notepad,
-    [ICON_CALC] = draw_calc,
+    [ICON_RECYCLE] = draw_trash,
+    [ICON_CMD] = draw_terminal,
+    [ICON_NOTEPAD] = draw_notes,
+    [ICON_CALC] = draw_calculator,
     [ICON_PAINT] = draw_paint,
     [ICON_MINES] = draw_mines,
-    [ICON_TASKMGR] = draw_taskmgr,
-    [ICON_PICTURES] = draw_pictures,
+    [ICON_TASKMGR] = draw_activity,
+    [ICON_PICTURES] = draw_preview,
     [ICON_HELP] = draw_help,
-    [ICON_DISPLAY] = draw_display,
-    [ICON_RUN] = draw_run,
+    [ICON_DISPLAY] = draw_sysprefs,
+    [ICON_RUN] = draw_spotlight,
     [ICON_LOGOFF] = draw_logoff,
     [ICON_POWER] = draw_power,
     [ICON_FOLDER] = draw_folder,
@@ -833,13 +1228,13 @@ static const icon_fn icon_fns[ICON_COUNT] = {
     [ICON_DRIVE] = draw_drive,
     [ICON_CDROM] = draw_cdrom,
     [ICON_KEPLER] = draw_kepler,
-    [ICON_ALLPROGS] = draw_allprogs,
+    [ICON_ALLPROGS] = draw_launchpad,
     [ICON_STANDBY] = draw_standby,
     [ICON_RESTART] = draw_restart,
-    [ICON_SWITCHUSER] = draw_switchuser,
-    [ICON_SPEAKER] = draw_speaker,
-    [ICON_NETWORK] = draw_network,
-    [ICON_SHOWDESKTOP] = draw_showdesktop,
+    [ICON_SWITCHUSER] = draw_logoff,
+    [ICON_SPEAKER] = g_speaker,
+    [ICON_NETWORK] = g_wifi,
+    [ICON_SHOWDESKTOP] = draw_folder_desktop,
     [ICON_INFO] = draw_info,
     [ICON_WARNING] = draw_warning,
     [ICON_ERROR] = draw_error,
@@ -847,16 +1242,60 @@ static const icon_fn icon_fns[ICON_COUNT] = {
     [ICON_FORWARD] = draw_forward,
     [ICON_UP] = draw_up,
     [ICON_SYSINFO] = draw_sysinfo,
+    [ICON_FINDER] = draw_finder,
+    [ICON_TRASH_FULL] = draw_trash_full,
+    [ICON_IMAGEFILE] = draw_imagefile,
+    [ICON_FOLDER_DESKTOP] = draw_folder_desktop,
+    [ICON_FOLDER_PICTURES] = draw_folder_pictures,
+    [ICON_FOLDER_DOWNLOADS] = draw_folder_downloads,
+    [ICON_FOLDER_APPS] = draw_folder_apps,
+    [ICON_GUEST] = draw_guest,
+    [GLYPH_KEPLER] = g_kepler,
+    [GLYPH_WIFI] = g_wifi,
+    [GLYPH_SPEAKER] = g_speaker,
+    [GLYPH_SEARCH] = g_search,
+    [GLYPH_CONTROL] = g_control,
+    [GLYPH_AIRDROP] = g_airdrop,
+    [GLYPH_RECENTS] = g_recents,
+    [GLYPH_DESKTOP] = g_desktop,
+    [GLYPH_APPS] = g_apps,
+    [GLYPH_DOCUMENT] = g_document,
+    [GLYPH_DOWNLOADS] = g_downloads,
+    [GLYPH_CLOUD] = g_cloud,
+    [GLYPH_DISK] = g_disk,
+    [GLYPH_TRASH] = g_trash,
+    [GLYPH_CHEVRON_L] = g_chevron_l,
+    [GLYPH_CHEVRON_R] = g_chevron_r,
+    [GLYPH_GRID] = g_grid,
+    [GLYPH_LIST] = g_list,
+    [GLYPH_COLUMNS] = g_columns,
+    [GLYPH_GALLERY] = g_gallery,
+    [GLYPH_GROUP] = g_group,
+    [GLYPH_SHARE] = g_share,
+    [GLYPH_TAG] = g_tag,
+    [GLYPH_MORE] = g_more,
+    [GLYPH_ARROW_R] = g_arrow_r,
+    [GLYPH_SLEEP] = g_sleep,
+    [GLYPH_RESTART] = g_restart,
+    [GLYPH_POWER] = g_power,
+    [GLYPH_PERSON] = g_person,
+    [GLYPH_TL_CLOSE] = g_tl_close,
+    [GLYPH_TL_MIN] = g_tl_min,
+    [GLYPH_TL_ZOOM] = g_tl_zoom,
+    [GLYPH_CHECK] = g_check,
+    [GLYPH_CHEVRON_D] = g_chevron_d,
+    [GLYPH_CMD] = g_cmd,
 };
 
 /* ---- cache ------------------------------------------------------------------------- */
 
-static const int sizes[] = { 16, 24, 32, 48, 64 };
-static image_t *cache[ICON_COUNT][5];
+static const int sizes[] = { 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 128 };
+#define N_SIZES ((int)ARRAY_LEN(sizes))
+static image_t *cache[ICON_COUNT][N_SIZES];
 
 static int size_slot(int size)
 {
-    for (int i = 0; i < ARRAY_LEN(sizes); i++)
+    for (int i = 0; i < N_SIZES; i++)
         if (sizes[i] == size)
             return i;
     return -1;
@@ -890,10 +1329,11 @@ void icons_prerender(void (*progress)(int done, int total))
     static const struct {
         int id, size;
     } common[] = {
-        { ICON_COMPUTER, 32 }, { ICON_DOCUMENTS, 32 }, { ICON_RECYCLE, 32 }, { ICON_CMD, 32 },
-        { ICON_NOTEPAD, 32 }, { ICON_KEPLER, 16 }, { ICON_KEPLER, 32 }, { ICON_SPEAKER, 16 },
-        { ICON_NETWORK, 16 }, { ICON_CMD, 16 }, { ICON_NOTEPAD, 16 }, { ICON_SHOWDESKTOP, 16 },
-        { ICON_COMPUTER, 16 }, { ICON_KEPLER, 64 }, { ICON_POWER, 32 },
+        { ICON_FINDER, 48 },   { ICON_ALLPROGS, 48 }, { ICON_CMD, 48 },     { ICON_NOTEPAD, 48 },
+        { ICON_CALC, 48 },     { ICON_PAINT, 48 },    { ICON_PICTURES, 48 }, { ICON_MINES, 48 },
+        { ICON_TASKMGR, 48 },  { ICON_DISPLAY, 48 },  { ICON_RECYCLE, 48 }, { ICON_DRIVE, 64 },
+        { GLYPH_KEPLER, 16 },  { GLYPH_WIFI, 16 },    { GLYPH_SEARCH, 14 }, { GLYPH_CONTROL, 16 },
+        { GLYPH_TL_CLOSE, 12 }, { GLYPH_TL_MIN, 12 }, { GLYPH_TL_ZOOM, 12 }, { ICON_KEPLER, 64 },
     };
     int n = ARRAY_LEN(common);
     for (int i = 0; i < n; i++) {
@@ -905,7 +1345,7 @@ void icons_prerender(void (*progress)(int done, int total))
 
 /* ---- user picture ---------------------------------------------------------------- */
 
-static image_t *user_pic[5];
+static image_t *user_pic[N_SIZES];
 static image_t *user_src;
 
 void icons_set_user_picture(const image_t *wall)
@@ -913,6 +1353,7 @@ void icons_set_user_picture(const image_t *wall)
     /* the green globe in the right half of the wallpaper */
     int cx = wall->w * 1022 / 1280, cy = wall->h * 300 / 800, r = wall->h * 230 / 800;
     int side = 2 * r;
+    image_free(user_src);
     user_src = image_new(side, side);
     for (int y = 0; y < side; y++)
         for (int x = 0; x < side; x++) {
@@ -925,18 +1366,16 @@ const image_t *icon_user_picture(int size)
 {
     int slot = size_slot(size);
     if (slot < 0)
-        slot = 2;
+        slot = 7;
     if (!user_pic[slot] && user_src) {
-        image_t *img = image_resize(user_src, sizes[slot], sizes[slot]);
-        /* round the corners */
-        gfx_t g = gfx_for_image(img);
-        image_t *mask = image_new(img->w, img->h);
+        int s = sizes[slot];
+        image_t *img = image_resize(user_src, s, s);
+        image_t *mask = image_new(s, s);
         gfx_t mg = gfx_for_image(mask);
-        gfx_round_rect(&mg, 0, 0, img->w, img->h, img->w / 8, HEX(0xFFFFFF), CORNER_ALL);
-        for (int i = 0; i < img->w * img->h; i++)
+        gfx_circle(&mg, s / 2, s / 2, s / 2, HEX(0xFFFFFF));
+        for (int i = 0; i < s * s; i++)
             img->px[i] = (img->px[i] & 0xFFFFFF) | (mask->px[i] & 0xFF000000u);
         image_free(mask);
-        (void)g;
         user_pic[slot] = img;
     }
     return user_pic[slot];
@@ -944,27 +1383,27 @@ const image_t *icon_user_picture(int size)
 
 /* ---- cursors ------------------------------------------------------------------------ */
 
+/* black with a white outline, like the Mac pointer */
 static const char *arrow_cursor[] = {
-    "X",
-    "XX",
-    "X.X",
-    "X..X",
-    "X...X",
-    "X....X",
-    "X.....X",
-    "X......X",
-    "X.......X",
-    "X........X",
-    "X.........X",
-    "X..........X",
-    "X......XXXXX",
-    "X...X..X",
-    "X..XX..X",
-    "X.X  X..X",
-    "XX   X..X",
-    "X     X..X",
-    "      X..X",
-    "       XX",
+    "o",
+    "oo",
+    "o#o",
+    "o##o",
+    "o###o",
+    "o####o",
+    "o#####o",
+    "o######o",
+    "o#######o",
+    "o########o",
+    "o#########o",
+    "o######oooo",
+    "o###o##o",
+    "o##oo##o",
+    "o#o  o##o",
+    "oo   o##o",
+    "o     o##o",
+    "      o##o",
+    "       oo",
 };
 
 static const char *hand_cursor[] = {
@@ -989,20 +1428,21 @@ static const char *hand_cursor[] = {
     "     XXXXXXXXX",
 };
 
+/* 'X' and '#' are black, '.' and 'o' white; everything gets a soft shadow */
 static void draw_pattern(gfx_t *g, const char **rows, int n, int x, int y)
 {
     for (int j = 0; j < n; j++)
-        for (int i = 0; rows[j][i]; i++) {
-            char c = rows[j][i];
-            if (c == 'X')
-                gfx_pixel(g, x + i + 1, y + j + 1, RGBA(0, 0, 0, 60));
-        }
+        for (int i = 0; rows[j][i]; i++)
+            if (rows[j][i] != ' ') {
+                gfx_pixel(g, x + i + 1, y + j + 2, RGBA(0, 0, 0, 40));
+                gfx_pixel(g, x + i, y + j + 1, RGBA(0, 0, 0, 30));
+            }
     for (int j = 0; j < n; j++)
         for (int i = 0; rows[j][i]; i++) {
             char c = rows[j][i];
-            if (c == 'X')
+            if (c == 'X' || c == '#')
                 gfx_pixel(g, x + i, y + j, HEX(0x000000));
-            else if (c == '.')
+            else if (c == '.' || c == 'o')
                 gfx_pixel(g, x + i, y + j, HEX(0xFFFFFF));
         }
 }
@@ -1035,8 +1475,8 @@ static void double_arrow(gfx_t *g, int x, int y, int dx, int dy)
 rect_t cursor_bounds(int cursor, int x, int y)
 {
     switch (cursor) {
-    case CURSOR_ARROW: return rect_make(x, y, 14, 22);
-    case CURSOR_HAND: return rect_make(x - 6, y, 20, 21);
+    case CURSOR_ARROW: return rect_make(x, y, 13, 21);
+    case CURSOR_HAND: return rect_make(x - 6, y, 20, 22);
     case CURSOR_BUSY: return rect_make(x, y, 30, 24);
     default: return rect_make(x - 12, y - 12, 25, 25);
     }
@@ -1053,9 +1493,13 @@ void cursor_draw(gfx_t *g, int cursor, int x, int y)
         break;
     case CURSOR_BUSY:
         draw_pattern(g, arrow_cursor, ARRAY_LEN(arrow_cursor), x, y);
-        gfx_circle(g, x + 20, y + 14, 7, HEX(0x1E5BD8));
-        gfx_circle(g, x + 21, y + 15, 5, HEX(0xFFFFFF));
-        gfx_circle(g, x + 22, y + 16, 3, HEX(0x6CC04A));
+        {
+            /* the spinning wheel, frozen */
+            static const uint32_t wheel[6] = { 0xFF453A, 0xFF9F0A, 0xFFD60A, 0x32D74B, 0x0A84FF, 0xBF5AF2 };
+            gfx_circle(g, x + 20, y + 15, 7, HEX(0x3A3A3C));
+            for (int k = 0; k < 6; k++)
+                gfx_circle(g, x + 20 + (k % 3 - 1) * 2, y + 15 + (k / 3) * 3 - 2, 3, HEX(wheel[k]));
+        }
         break;
     case CURSOR_IBEAM:
         for (int pass = 0; pass < 2; pass++) {
