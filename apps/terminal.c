@@ -11,6 +11,9 @@
 #define CW         8
 #define LH         16
 #define PAD        4
+#define COMP_ROWS  128 /* lines kept for .comp; more than any screen shows */
+#define COMP_COLS  400
+#define COMP_MS    60000
 
 typedef struct {
     char ch;
@@ -39,6 +42,11 @@ typedef struct {
     /* a network command still running: curl or nslookup */
     http_t *job;
     char lookup[128];
+    /* .comp: random text streaming over the whole screen */
+    uint32_t comp_until;
+    char comp[COMP_ROWS][COMP_COLS + 1];
+    uint8_t comp_shade[COMP_ROWS];
+    int comp_head;
 } term_t;
 
 static const uint32_t palette[16] = {
@@ -361,6 +369,7 @@ static const struct {
     { "color", "Set console colours, e.g. color 0a" },
     { "cowsay", "Let a cow say something" },
     { "curl", "Fetch a web page, e.g. curl https://example.com" },
+    { ".comp", "Fill the screen with random text for a minute (also: sudo)" },
     { "date", "Show today's date" },
     { "del", "Delete a file" },
     { "dir", "List a directory (ls for the short form)" },
@@ -528,6 +537,130 @@ static void cowsay(term_t *t, const char *msg)
 }
 
 static void run(term_t *t, window_t *w, char *line);
+
+/* ---- .comp: a minute of random text, line after line, over the whole screen ------------------------------ */
+
+static const char *comp_words[] = {
+    "kernel", "segment", "inode", "socket", "handshake", "payload", "cipher", "vector", "buffer", "thread",
+    "mutex", "page", "frame", "packet", "route", "token", "session", "daemon", "module", "driver",
+    "sector", "cluster", "checksum", "entropy", "nonce", "certificate", "process", "registry", "cache", "stack",
+};
+
+static void comp_hex(char *out, int n, int digits)
+{
+    static const char hx[] = "0123456789abcdef";
+    int len = strlen(out);
+    for (int i = 0; i < digits && len < n - 1; i++)
+        out[len++] = hx[krand() & 15];
+    out[len] = 0;
+}
+
+static void comp_line(term_t *t, char *out, int n, uint8_t *shade)
+{
+    char tmp[96];
+    out[0] = 0;
+    *shade = krand() % 4;
+    switch (krand() % 7) {
+    case 0: /* a hex dump row */
+        strlcpy(out, "0x", n);
+        comp_hex(out, n, 8);
+        strlcat(out, ":", n);
+        while ((int)strlen(out) < n - 4) {
+            strlcat(out, "  ", n);
+            comp_hex(out, n, 4);
+        }
+        break;
+    case 1: /* a log line */
+        ksnprintf(out, n, "[%6u.%06u] %s: %s %s at 0x", timer_ms() / 1000, krand() % 1000000,
+                  comp_words[krand() % ARRAY_LEN(comp_words)], comp_words[krand() % ARRAY_LEN(comp_words)],
+                  (krand() & 1) ? "mapped" : "verified");
+        comp_hex(out, n, 16);
+        break;
+    case 2: /* a path being scanned */
+        strlcpy(out, "scan  C:\\", n);
+        for (int d = 0, depth = 2 + krand() % 5; d < depth; d++) {
+            strlcat(out, comp_words[krand() % ARRAY_LEN(comp_words)], n);
+            strlcat(out, d == depth - 1 ? ".sys" : "\\", n);
+        }
+        ksnprintf(tmp, sizeof tmp, "   %u bytes   OK", krand() % 9000000);
+        strlcat(out, tmp, n);
+        break;
+    case 3: /* a key */
+        strlcpy(out, "key ", n);
+        comp_hex(out, n, 64);
+        strlcat(out, "  ", n);
+        comp_hex(out, n, 64);
+        break;
+    case 4: /* binary */
+        for (int i = 0; i < n - 1 && i < 8 * 18; i++) {
+            out[i] = (i % 9 == 8) ? ' ' : '0' + (krand() & 1);
+            out[i + 1] = 0;
+        }
+        break;
+    case 5: /* a progress line */
+        ksnprintf(out, n, "%-12s [", comp_words[krand() % ARRAY_LEN(comp_words)]);
+        for (int i = 0, pct = krand() % 101; i < 40; i++)
+            strlcat(out, i * 100 / 40 < pct ? "#" : ".", n);
+        ksnprintf(tmp, sizeof tmp, "] %3u%%", krand() % 101);
+        strlcat(out, tmp, n);
+        break;
+    default: /* plain random characters */
+        for (int i = 0, len = 20 + krand() % (n - 21); i < len; i++) {
+            out[i] = 33 + krand() % 94;
+            out[i + 1] = 0;
+        }
+        break;
+    }
+    (void)t;
+}
+
+static void comp_push(term_t *t)
+{
+    t->comp_head = (t->comp_head + 1) % COMP_ROWS;
+    comp_line(t, t->comp[t->comp_head], COMP_COLS + 1, &t->comp_shade[t->comp_head]);
+}
+
+static void comp_start(term_t *t, window_t *w)
+{
+    ksrand(timer_ms() ^ krand());
+    memset(t->comp, 0, sizeof t->comp);
+    t->comp_head = 0;
+    t->comp_until = timer_ms() + COMP_MS;
+    wm_set_fullscreen(w, true);
+    wm_set_tick(w, 30);
+}
+
+static void comp_stop(term_t *t, window_t *w)
+{
+    t->comp_until = 0;
+    wm_set_fullscreen(w, false);
+    wm_set_tick(w, 530);
+    tputs(t, "\x1b" "a.comp finished.\x1bx\n\n");
+    prompt(t);
+    wm_invalidate_client(w);
+}
+
+static void comp_paint(term_t *t, gfx_t *g, int cw, int ch)
+{
+    static const uint32_t shades[4] = { 0x33FF66, 0x22CC55, 0x1A9944, 0xB8FFC8 };
+    gfx_fill(g, 0, 0, cw, ch, HEX(0x000000));
+    int rows = (ch - 2 * PAD) / LH;
+    int cols = MIN((cw - 2 * PAD) / CW, COMP_COLS);
+    for (int r = 0; r < rows && r < COMP_ROWS; r++) {
+        /* the newest line sits at the bottom, older ones climb up */
+        int i = (t->comp_head - (rows - 1 - r) + COMP_ROWS * 2) % COMP_ROWS;
+        int len = MIN((int)strlen(t->comp[i]), cols);
+        if (len)
+            gfx_text_n(g, &font_mono, PAD, PAD + r * LH - 1, t->comp[i], len, HEX(shades[t->comp_shade[i]]));
+    }
+    /* the time left, in the corner */
+    char left[32];
+    uint32_t now = timer_ms();
+    ksnprintf(left, sizeof left, " .comp  %02u s  [Esc] ", now < t->comp_until ? (t->comp_until - now + 999) / 1000 : 0);
+    int lw = strlen(left) * CW;
+    gfx_fill(g, cw - lw - PAD, PAD, lw, LH, HEX(0x33FF66));
+    gfx_text(g, &font_mono, cw - lw - PAD, PAD - 1, left, HEX(0x000000));
+}
 
 static void exec(term_t *t, window_t *w, char *cmd, char *arg)
 {
@@ -732,6 +865,8 @@ static void exec(term_t *t, window_t *w, char *cmd, char *arg)
         }
         strlcpy(t->lookup, arg, sizeof t->lookup);
         wm_set_tick(w, 20);
+    } else if (!strcmp(cmd, ".comp") || !strcmp(cmd, "sudo")) {
+        comp_start(t, w);
     } else if (!strcmp(cmd, "cowsay")) {
         cowsay(t, arg);
     } else if (!strcmp(cmd, "beep")) {
@@ -808,6 +943,10 @@ static int first_line(term_t *t) { return MAX(0, MAX(0, t->count - ROWS) - t->vi
 static void term_paint(window_t *w, gfx_t *g, int cw, int ch)
 {
     term_t *t = w->data;
+    if (t->comp_until) {
+        comp_paint(t, g, cw, ch);
+        return;
+    }
     int first = first_line(t);
     uint8_t def_bg = t->def_attr >> 4;
     for (int r = 0; r < ROWS; r++) {
@@ -900,6 +1039,11 @@ static void term_key(window_t *w, const input_event_t *ev)
     term_t *t = w->data;
     if (!ev->pressed)
         return;
+    if (t->comp_until) {
+        if (ev->key == KEY_ESC || ((ev->mods & MOD_CTRL) && ktolower(ev->key) == 'c'))
+            comp_stop(t, w);
+        return;
+    }
     if (ev->mods & MOD_CTRL) {
         switch (ktolower(ev->key)) {
         case 'c':
@@ -952,7 +1096,7 @@ static void term_key(window_t *w, const input_event_t *ev)
         }
         t->hist_pos = t->hist_n;
         run(t, w, line);
-        if (!w->dead && !t->job && !t->lookup[0]) {
+        if (!w->dead && !t->job && !t->lookup[0] && !t->comp_until) {
             if (t->cx)
                 newline(t);
             if (line[0] && strcmp(line, "cls") && strcmp(line, "clear"))
@@ -1099,6 +1243,15 @@ static void poll_job(window_t *w, term_t *t)
 static void term_tick(window_t *w)
 {
     term_t *t = w->data;
+    if (t->comp_until) {
+        if (timer_ms() >= t->comp_until) {
+            comp_stop(t, w);
+        } else {
+            comp_push(t);
+            wm_invalidate_client(w);
+        }
+        return;
+    }
     if (t->job || t->lookup[0])
         poll_job(w, t);
     if (wm_active() == w)
