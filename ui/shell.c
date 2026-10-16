@@ -240,10 +240,16 @@ void ui_launch(const char *cmd)
 #else
         browser_open(*arg ? arg : NULL);
 #endif
+    else if (!strcmp(name, "brady") || !strcmp(name, "bradybuddy"))
+        brady_open();
     else if (!strcmp(name, "calc") || !strcmp(name, "calculator"))
         calc_open();
-    else if (!strcmp(name, "cmd") || !strcmp(name, "terminal"))
+    else if (!strcmp(name, "cmd") || !strcmp(name, "terminal") || !strcmp(name, "bash"))
+#ifdef KEPLER_HOSTED
+        host_launch("kepler-terminal", NULL); /* a real Linux shell, with the KeplerOS commands added */
+#else
         terminal_open();
+#endif
     else if (!strcmp(name, "explorer"))
         explorer_open(*arg ? arg : "::computer");
     else if (!strcmp(name, "finder") || !strcmp(name, "mydocs") || !strcmp(name, "documents"))
@@ -584,7 +590,8 @@ static void handle_key(const input_event_t *ev)
 extern const uint8_t wallpaper_jpg[], wallpaper_jpg_end[];
 extern const uint8_t kepler_icon_jpg[], kepler_icon_jpg_end[];
 extern const uint32_t finder_icon_argb[], terminal_icon_argb[], notepad_icon_argb[], calc_icon_argb[],
-    activity_icon_argb[], settings_icon_argb[], launchpad_icon_argb[], trash_icon_argb[];
+    activity_icon_argb[], settings_icon_argb[], launchpad_icon_argb[], trash_icon_argb[],
+    brady_icon_argb[];
 
 static void boot_work(void (*progress)(int pct))
 {
@@ -615,10 +622,10 @@ static void boot_work(void (*progress)(int pct))
         { (uint32_t *)notepad_icon_argb, 256, 256 },  { (uint32_t *)calc_icon_argb, 150, 150 },
         { (uint32_t *)activity_icon_argb, 256, 256 }, { (uint32_t *)settings_icon_argb, 96, 96 },
         { (uint32_t *)launchpad_icon_argb, 256, 256 }, { (uint32_t *)trash_icon_argb, 256, 256 },
-        { (uint32_t *)trash_icon_argb, 256, 256 },
+        { (uint32_t *)trash_icon_argb, 256, 256 },   { (uint32_t *)brady_icon_argb, 256, 256 },
     };
     static const int ids[] = { ICON_FINDER,  ICON_CMD,      ICON_NOTEPAD, ICON_CALC,      ICON_TASKMGR,
-                               ICON_DISPLAY, ICON_ALLPROGS, ICON_RECYCLE, ICON_TRASH_FULL };
+                               ICON_DISPLAY, ICON_ALLPROGS, ICON_RECYCLE, ICON_TRASH_FULL, ICON_BRADY };
     for (int i = 0; i < ARRAY_LEN(ids); i++)
         icons_set_image_plain(ids[i], &pics[i]);
     icons_prerender(NULL);

@@ -1,0 +1,16 @@
+#!/bin/sh
+# The Terminal: a real bash shell in xterm, in KeplerOS's colours, with the
+# KeplerOS commands added (/etc/kepleros/commands.sh).
+cd "$HOME"
+export KEPLER_TERMINAL=1
+# BradyBuddy opens the Terminal with a command ready to run: --suggest=COMMAND
+case "$1" in
+--suggest=*) export KEPLER_SUGGEST="${1#--suggest=}"; shift ;;
+esac
+exec xterm -title Terminal -class Terminal \
+    -fa "DejaVu Sans Mono" -fs 11 -geometry 120x36 \
+    -bg "#0c0c0c" -fg "#e6e6e6" -cr "#40e66e" -bc \
+    -sl 5000 +sb -si -sk \
+    -xrm "XTerm*selectToClipboard: true" -xrm "XTerm*metaSendsEscape: true" \
+    -xrm "XTerm*VT100.translations: #override Ctrl Shift <Key>C: copy-selection(CLIPBOARD) \n Ctrl Shift <Key>V: insert-selection(CLIPBOARD)" \
+    "$@" -e bash -l

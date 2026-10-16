@@ -18,6 +18,15 @@ make -C "$HERE" linux
 install -D -m755 "$HERE/build/linux/kepler-shell" "$ROOT/usr/lib/kepleros/kepler-shell"
 install -D -m755 "$HERE/linux/session.sh" "$ROOT/usr/lib/kepleros/session"
 install -D -m755 "$HERE/linux/kepler-launch.sh" "$ROOT/usr/local/bin/Kepler"   # found before /usr/bin/Kepler
+# the Terminal (bash in xterm), also the system's terminal for other programs
+install -D -m755 "$HERE/linux/kepler-terminal.sh" "$ROOT/usr/local/bin/kepler-terminal"
+chroot "$ROOT" update-alternatives --quiet --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/local/bin/kepler-terminal 60
+chroot "$ROOT" update-alternatives --quiet --set x-terminal-emulator /usr/local/bin/kepler-terminal
+# the KeplerOS commands, in bash: .comp is a program, the rest are read by every interactive shell
+install -D -m755 "$HERE/linux/comp.sh" "$ROOT/usr/local/bin/.comp"
+install -D -m644 "$HERE/linux/kepler-commands.sh" "$ROOT/etc/kepleros/commands.sh"
+grep -q kepleros/commands.sh "$ROOT/etc/bash.bashrc" ||
+    echo '[ -r /etc/kepleros/commands.sh ] && . /etc/kepleros/commands.sh' >> "$ROOT/etc/bash.bashrc"
 cat > "$ROOT/home/kepler/.bash_profile" <<'EOF'
 if [ -z "$DISPLAY" ] && [ "$(tty)" = /dev/tty1 ]; then
     exec startx /usr/lib/kepleros/session -- -nolisten tcp -keeptty vt1 >/tmp/xsession.log 2>&1
