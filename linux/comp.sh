@@ -1,6 +1,6 @@
 #!/bin/bash
 # .comp: a minute of random text, line after line, over the whole screen.
-# The same command as in the KeplerOS Terminal. Esc or Ctrl+C stops it early.
+# One of the KeplerOS commands in the Terminal. Esc or Ctrl+C stops it early.
 
 if [ -z "$KEPLER_COMP" ] && [ -n "$DISPLAY" ]; then
     # a full-screen window of its own; this terminal waits for it

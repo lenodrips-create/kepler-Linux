@@ -9,9 +9,6 @@ const app_info_t g_apps[] = {
     { "Launchpad", ICON_ALLPROGS, "launchpad", true },
     { "Kepler", ICON_BROWSER, "kepler", true },
     { "Terminal", ICON_CMD, "terminal", true },
-#ifdef KEPLER_HOSTED
-    { "Linux Terminal", ICON_LINUXTERM, "linuxterm", true },
-#endif
     { "Notepad", ICON_NOTEPAD, "notepad", true },
     { "Calculator", ICON_CALC, "calc", true },
     { "Paint", ICON_PAINT, "paint", false },

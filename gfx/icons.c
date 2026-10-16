@@ -1258,7 +1258,6 @@ static const icon_fn icon_fns[ICON_COUNT] = {
     [ICON_DOCUMENTS] = draw_documents,
     [ICON_RECYCLE] = draw_trash,
     [ICON_CMD] = draw_terminal,
-    [ICON_LINUXTERM] = draw_terminal,
     [ICON_NOTEPAD] = draw_notes,
     [ICON_CALC] = draw_calculator,
     [ICON_PAINT] = draw_paint,

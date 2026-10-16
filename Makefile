@@ -68,7 +68,7 @@ HOST_CFLAGS := -std=gnu11 -O2 -g -DKEPLER_HOSTED -fno-strict-aliasing \
                -Ikernel -Idrivers -Igfx -Iui -Ifs -Iapps -Inet -Ilinux -Ithird_party/bearssl/inc
 HOST_LIBS   := -lX11 -lXext -lXcomposite -lXdamage -lXfixes -lXcursor -lpthread
 HOST_SRCS   := kernel/lib.c $(wildcard gfx/*.c ui/*.c fs/*.c linux/*.c) \
-               $(filter-out apps/browser.c apps/html.c,$(wildcard apps/*.c)) \
+               $(filter-out apps/browser.c apps/html.c apps/terminal.c,$(wildcard apps/*.c)) \
                net/http.c net/inflate.c net/entropy.c net/ca_roots.c
 HOST_OBJS   := $(patsubst %.c,build/linux/%.o,$(HOST_SRCS)) build/linux/assets/assets.o
 HOST_BEAR   := $(patsubst %.c,build/linux/%.o,$(BEAR_SRCS))
