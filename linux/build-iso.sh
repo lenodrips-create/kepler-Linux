@@ -53,7 +53,38 @@ done
 sed -i '/casper-bottom\/\(15autologin\|19keyboard\|20xconfig\|22desktop_settings\|25adduser\|30accessibility\|31disable_update_notifier\|33enable_apport_crashes\|34disable_kde_services\|37disable_screensaver_lubuntu\|40install_driver_updates\|41apt_cdrom\|44pk_allow_ubuntu\|45jackd2\|52gnome_initial_setup\|53disable_unattended_upgrades\|55disable_snap_refresh\|56override_nvidia_udev_rule\|57pollinate\|59disable_mozc_autosetup\|60_create_intaller_logdir\|61desktop_canary_tweaks\)/d' \
     "$ROOT/usr/share/initramfs-tools/scripts/casper-bottom/ORDER" 2>/dev/null || true
 
+# ---- the VM edition -----------------------------------------------------------------------
+# KEPLER_EDITION=vm leaves out what only real PCs use: device firmware (Wi-Fi
+# chips, graphics cards) and the extra hardware drivers. Virtual machines'
+# drivers are all in the main kernel package. Both come back after the build.
+STASH=$WORK/stash
+KVER=$(basename "$(readlink -f "$ROOT/boot/vmlinuz")" | sed 's/^vmlinuz-//')
+restore() {
+    if [ -d "$STASH/firmware" ]; then
+        rm -rf "$ROOT/usr/lib/firmware"
+        mv "$STASH/firmware" "$ROOT/usr/lib/firmware"
+    fi
+    if [ -f "$STASH/modules-extra.tar" ]; then
+        tar -C "$ROOT" -xf "$STASH/modules-extra.tar"
+        rm -f "$STASH/modules-extra.tar"
+        chroot "$ROOT" depmod "$KVER"
+    fi
+}
+trap restore EXIT
+if [ "${KEPLER_EDITION:-full}" = vm ]; then
+    mkdir -p "$STASH"
+    mv "$ROOT/usr/lib/firmware" "$STASH/firmware"
+    mkdir -p "$ROOT/usr/lib/firmware"
+    chroot "$ROOT" dpkg-query -L "linux-modules-extra-$KVER" | while read -r f; do
+        if [ -f "$ROOT$f" ]; then echo "${f#/}"; fi
+    done > "$STASH/modules-extra.list"
+    tar -C "$ROOT" -cf "$STASH/modules-extra.tar" -T "$STASH/modules-extra.list"
+    xargs -a "$STASH/modules-extra.list" -I{} rm -f "$ROOT/{}"
+    chroot "$ROOT" depmod "$KVER"
+fi
+
 # ---- boot files ---------------------------------------------------------------------------
+sed -i 's/^COMPRESS=.*/COMPRESS=xz/' "$ROOT/etc/initramfs-tools/initramfs.conf"
 for m in proc sys dev; do mountpoint -q "$ROOT/$m" || mount --bind "/$m" "$ROOT/$m"; done
 chroot "$ROOT" update-initramfs -u >/dev/null
 for m in dev sys proc; do umount -l "$ROOT/$m"; done
