@@ -86,7 +86,12 @@ echo "KeplerOS live" > "$ISO/.disk/info"
 VM_SKIP=()
 if [ "${KEPLER_EDITION:-full}" = vm ]; then
     # VMs draw without OpenGL (session.sh), so Mesa's software renderer stays out too
-    VM_SKIP=('usr/lib/x86_64-linux-gnu/libLLVM*' 'usr/lib/x86_64-linux-gnu/libgallium*' 'usr/lib/x86_64-linux-gnu/dri/*')
+    VM_SKIP=('usr/lib/x86_64-linux-gnu/libLLVM*' 'usr/lib/x86_64-linux-gnu/libgallium*' 'usr/lib/x86_64-linux-gnu/dri/*'
+             # and what a VM has no use for: Wi-Fi and TV/webcam drivers, the wider Noto fonts
+             # (DejaVu and Liberation stay, as does the emoji font), and non-English translations
+             'usr/lib/modules/*/kernel/drivers/net/wireless' 'usr/lib/modules/*/kernel/drivers/media'
+             'usr/share/fonts/truetype/noto/NotoS*' 'usr/share/qt6/translations/*.qm'
+             'usr/share/qt6/translations/qtwebengine_locales/[!e]*')
 fi
 mksquashfs "$ROOT" "$ISO/casper/filesystem.squashfs" -comp xz -Xbcj x86 -b 1M -noappend -no-progress -processors 2 \
     -wildcards -e "${VM_SKIP[@]}" 'boot/*' 'proc/*' 'sys/*' 'dev/*' 'run/*' 'tmp/*' 'var/cache/apt/*' 'var/log/*' \
