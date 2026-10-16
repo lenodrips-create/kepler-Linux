@@ -23,8 +23,12 @@ fi
 xset s off -dpms 2>/dev/null
 
 # Kepler (Chromium) draws without the GPU inside virtual machines, where 3D is slow or missing
+# and Qt draws in software too: no OpenGL at all, which virtual graphics cards
+# (and Mesa's software OpenGL under emulators) handle badly
 if systemd-detect-virt -q; then
     export QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu"
+    export QT_QUICK_BACKEND=software
+    export QT_XCB_GL_INTEGRATION=none
 fi
 export QT_QPA_PLATFORM=xcb
 
