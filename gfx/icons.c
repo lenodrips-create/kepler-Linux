@@ -741,6 +741,52 @@ static void g_cmd(cv_t *cv)
     line(cv, 8.5f, 21, 23.5f, 21, 2.4f, WHITE);
 }
 
+static void g_lock(cv_t *cv)
+{
+    ring_ex(cv, 16, 13, 7.2f, 7.4f, 2.6f, 0, -1, 0, 0, WHITE);
+    line(cv, 8.4f, 13, 8.4f, 16, 2.6f, WHITE);
+    line(cv, 23.6f, 13, 23.6f, 16, 2.6f, WHITE);
+    rrect(cv, 5, 15, 22, 15, 3, WHITE);
+}
+
+static void g_reload(cv_t *cv)
+{
+    ring(cv, 16, 17, 10.8f, 2.8f, -80, 10, WHITE);
+    const float head[] = { 21.6f, 1.6f, 27.6f, 8.8f, 18.8f, 10.8f };
+    poly(cv, head, 3, WHITE);
+}
+
+static void g_home(cv_t *cv)
+{
+    const float roof[] = { 16, 3.5f, 30, 16, 26.5f, 16, 26.5f, 28.5f, 5.5f, 28.5f, 5.5f, 16, 2, 16 };
+    poly(cv, roof, 7, WHITE);
+    rrect(cv, 13, 19.5f, 6, 9, 1, erase());
+}
+
+static void g_close(cv_t *cv)
+{
+    line(cv, 8, 8, 24, 24, 3.2f, WHITE);
+    line(cv, 24, 8, 8, 24, 3.2f, WHITE);
+}
+
+static void g_shield(cv_t *cv)
+{
+    const float out[] = { 16, 2.5f, 28, 7, 28, 15.5f, 16, 29.5f, 4, 15.5f, 4, 7 };
+    poly(cv, out, 6, WHITE);
+    const float in[] = { 16, 5.4f, 25.4f, 8.9f, 25.4f, 15.2f, 16, 26.2f, 6.6f, 15.2f, 6.6f, 8.9f };
+    poly(cv, in, 6, erase());
+    line(cv, 11, 16, 14.8f, 19.8f, 2.6f, WHITE);
+    line(cv, 14.8f, 19.8f, 21.4f, 12.2f, 2.6f, WHITE);
+}
+
+static void g_globe(cv_t *cv)
+{
+    ring(cv, 16, 16, 13, 2.4f, 0, 0, WHITE);
+    ring_ex(cv, 16, 16, 6.4f, 13, 2.2f, 0, 0, 0, 0, WHITE);
+    line(cv, 3.5f, 16, 28.5f, 16, 2.2f, WHITE);
+    line(cv, 16, 3.5f, 16, 28.5f, 2.2f, WHITE);
+}
+
 /* a glyph pressed into the front of a folder */
 static void emboss(cv_t *cv, icon_fn glyph)
 {
@@ -1285,6 +1331,12 @@ static const icon_fn icon_fns[ICON_COUNT] = {
     [GLYPH_CHECK] = g_check,
     [GLYPH_CHEVRON_D] = g_chevron_d,
     [GLYPH_CMD] = g_cmd,
+    [GLYPH_LOCK] = g_lock,
+    [GLYPH_RELOAD] = g_reload,
+    [GLYPH_HOME] = g_home,
+    [GLYPH_CLOSE] = g_close,
+    [GLYPH_SHIELD] = g_shield,
+    [GLYPH_GLOBE] = g_globe,
 };
 
 /* ---- cache ------------------------------------------------------------------------- */
@@ -1301,13 +1353,37 @@ static int size_slot(int size)
     return -1;
 }
 
+static const image_t *pictures[ICON_COUNT];
+
+void icons_set_image(int id, const image_t *src)
+{
+    if (id >= 0 && id < ICON_COUNT)
+        pictures[id] = src;
+}
+
+/* a picture scaled onto the app-icon squircle */
+static void draw_picture(cv_t *cv, const image_t *src)
+{
+    cv_t l = layer_new(cv);
+    int x0 = (int)(SQ_X * cv->size / 32), y0 = (int)(SQ_Y * cv->size / 32);
+    int side = (int)(SQ_S * cv->size / 32 + 1.999f);
+    image_t *scaled = image_resize(src, side, side);
+    gfx_blit(&l.g, x0, y0, scaled);
+    image_free(scaled);
+    /* a faint rim so a dark picture still reads as an icon */
+    rrect(&l, SQ_X, SQ_Y, SQ_S, 2.4f, 0, vlin(SQ_Y, SQ_Y + 2.4f, RGBA(255, 255, 255, 40), RGBA(255, 255, 255, 0)));
+    squircle_merge(cv, &l);
+}
+
 static image_t *render(int id, int size)
 {
     cv_t cv = { 0 };
     cv.img = image_new(size, size);
     cv.g = gfx_for_image(cv.img);
     cv.size = size;
-    if (icon_fns[id])
+    if (pictures[id])
+        draw_picture(&cv, pictures[id]);
+    else if (icon_fns[id])
         icon_fns[id](&cv);
     return cv.img;
 }
@@ -1329,7 +1405,7 @@ void icons_prerender(void (*progress)(int done, int total))
     static const struct {
         int id, size;
     } common[] = {
-        { ICON_FINDER, 48 },   { ICON_ALLPROGS, 48 }, { ICON_CMD, 48 },     { ICON_NOTEPAD, 48 },
+        { ICON_FINDER, 48 },   { ICON_ALLPROGS, 48 }, { ICON_BROWSER, 48 }, { ICON_CMD, 48 },     { ICON_NOTEPAD, 48 },
         { ICON_CALC, 48 },     { ICON_PAINT, 48 },    { ICON_PICTURES, 48 }, { ICON_MINES, 48 },
         { ICON_TASKMGR, 48 },  { ICON_DISPLAY, 48 },  { ICON_RECYCLE, 48 }, { ICON_DRIVE, 64 },
         { GLYPH_KEPLER, 16 },  { GLYPH_WIFI, 16 },    { GLYPH_SEARCH, 14 }, { GLYPH_CONTROL, 16 },

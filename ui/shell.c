@@ -7,6 +7,7 @@
 
 #include "apps.h"
 #include "jpeg.h"
+#include "net.h"
 #include "ramfs.h"
 #include "ui.h"
 
@@ -213,6 +214,8 @@ void ui_launch(const char *cmd)
     close_launchers();
     if (!strcmp(name, "notepad") || !strcmp(name, "edit") || !strcmp(name, "textedit"))
         notepad_open(*arg ? arg : NULL);
+    else if (!strcmp(name, "kepler") || !strcmp(name, "browser") || !strcmp(name, "safari") || !strcmp(name, "web"))
+        browser_open(*arg ? arg : NULL);
     else if (!strcmp(name, "calc") || !strcmp(name, "calculator"))
         calc_open();
     else if (!strcmp(name, "cmd") || !strcmp(name, "terminal"))
@@ -389,6 +392,7 @@ static void route_mouse(int kind, int button)
 
 static void handle_mouse(const input_event_t *ev)
 {
+    entropy_add(ev, sizeof *ev);
     if (mode == MODE_STANDBY) {
         if (ev->buttons)
             wake();
@@ -505,6 +509,7 @@ static bool global_key(const input_event_t *ev)
 
 static void handle_key(const input_event_t *ev)
 {
+    entropy_add(ev, sizeof *ev);
     if (mode == MODE_STANDBY) {
         if (ev->pressed)
             wake();
@@ -546,11 +551,13 @@ static void handle_key(const input_event_t *ev)
 /* ---- boot and main loop ------------------------------------------------------------------- */
 
 extern const uint8_t wallpaper_jpg[], wallpaper_jpg_end[];
+extern const uint8_t kepler_icon_jpg[], kepler_icon_jpg_end[];
 
 static void boot_work(void (*progress)(int pct))
 {
     progress(5);
     fs_init();
+    net_init();
     image_t *src;
     if (!jpeg_decode(wallpaper_jpg, wallpaper_jpg_end - wallpaper_jpg, &src))
         panic("could not decode the wallpaper");
@@ -563,6 +570,9 @@ static void boot_work(void (*progress)(int pct))
     icons_set_user_picture(wall);
     desktop_init(wall);
     progress(70);
+    image_t *kepler;
+    if (jpeg_decode(kepler_icon_jpg, kepler_icon_jpg_end - kepler_icon_jpg, &kepler))
+        icons_set_image(ICON_BROWSER, kepler);
     icons_prerender(NULL);
     progress(100);
 }
@@ -593,6 +603,7 @@ void desktop_main(multiboot_info_t *mbi)
             else if (ev.type == EV_KEY)
                 handle_key(&ev);
         }
+        net_poll();
         uint32_t now = timer_ms();
         if (now - last_tick >= 15) {
             last_tick = now;

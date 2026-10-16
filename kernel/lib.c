@@ -125,6 +125,28 @@ char *strrchr(const char *s, int c)
     return (char *)last;
 }
 
+char *strstr(const char *hay, const char *needle)
+{
+    size_t n = strlen(needle);
+    for (; *hay; hay++)
+        if (!strncmp(hay, needle, n))
+            return (char *)hay;
+    return n ? NULL : (char *)hay;
+}
+
+char *strcasestr(const char *hay, const char *needle)
+{
+    size_t n = strlen(needle);
+    for (; *hay; hay++) {
+        size_t i = 0;
+        while (i < n && hay[i] && ktolower(hay[i]) == ktolower(needle[i]))
+            i++;
+        if (i == n)
+            return (char *)hay;
+    }
+    return n ? NULL : (char *)hay;
+}
+
 size_t strlcpy(char *dst, const char *src, size_t n)
 {
     size_t len = strlen(src);

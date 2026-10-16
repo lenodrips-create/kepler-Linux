@@ -73,6 +73,8 @@ int strncmp(const char *a, const char *b, size_t n);
 int strcasecmp(const char *a, const char *b);
 char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
+char *strstr(const char *hay, const char *needle);
+char *strcasestr(const char *hay, const char *needle);
 size_t strlcpy(char *dst, const char *src, size_t n);
 size_t strlcat(char *dst, const char *src, size_t n);
 char *kstrdup(const char *s);
@@ -147,6 +149,7 @@ void rtc_read(datetime_t *dt);
 /* ---- pci.c -------------------------------------------------------------- */
 
 uint32_t pci_read(uint8_t bus, uint8_t slot, uint8_t func, uint8_t off);
+void pci_write(uint8_t bus, uint8_t slot, uint8_t func, uint8_t off, uint32_t value);
 bool pci_find(uint16_t vendor, uint16_t device, uint8_t *bus, uint8_t *slot, uint8_t *func);
 int pci_list(char lines[][64], int max);
 

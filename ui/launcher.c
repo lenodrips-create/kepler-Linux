@@ -7,6 +7,7 @@
 const app_info_t g_apps[] = {
     { "Finder", ICON_FINDER, "finder", true },
     { "Launchpad", ICON_ALLPROGS, "launchpad", true },
+    { "Kepler", ICON_BROWSER, "kepler", true },
     { "Terminal", ICON_CMD, "terminal", true },
     { "Notepad", ICON_NOTEPAD, "notepad", true },
     { "Calculator", ICON_CALC, "calc", true },
@@ -300,7 +301,10 @@ static void sp_search(void)
         }
     int budget = 4;
     search_files(fs_root(), &budget);
-    char line[80];
+    char line[80], target[160];
+    ksnprintf(line, sizeof line, "Search the Web for \"%s\"", q);
+    ksnprintf(target, sizeof target, "kepler ?%s", q);
+    add_result(R_RUN, ICON_BROWSER, line, "Kepler", target);
     ksnprintf(line, sizeof line, "Run \"%s\"", q);
     add_result(R_RUN, ICON_CMD, line, "Command", q);
 }

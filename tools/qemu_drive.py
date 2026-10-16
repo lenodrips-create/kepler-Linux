@@ -220,7 +220,7 @@ def main():
     proc = subprocess.Popen([
         'qemu-system-i386', *(['-cdrom', args.iso] if args.iso else ['-kernel', args.kernel]), '-m', args.mem, '-vga', 'std',
         '-display', 'none', '-serial', f'file:{log}', '-qmp', f'unix:{sock},server,nowait',
-        '-rtc', 'base=localtime', '-no-reboot',
+        '-rtc', 'base=localtime', '-no-reboot', '-nic', 'user,model=e1000',
     ])
     try:
         d = Driver(Qmp(sock), args.outdir, log)

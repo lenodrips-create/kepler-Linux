@@ -47,6 +47,7 @@ enum {
     ICON_FOLDER_DOWNLOADS,
     ICON_FOLDER_APPS,
     ICON_GUEST,
+    ICON_BROWSER, /* Kepler: drawn from a picture, see icons_set_image */
 
     /* white template glyphs: draw them with gfx_blit_tint in any colour */
     GLYPH_KEPLER,
@@ -84,12 +85,21 @@ enum {
     GLYPH_CHECK,
     GLYPH_CHEVRON_D,
     GLYPH_CMD, /* the Command key sign */
+    GLYPH_LOCK,
+    GLYPH_RELOAD,
+    GLYPH_HOME,
+    GLYPH_CLOSE,
+    GLYPH_SHIELD,
+    GLYPH_GLOBE,
     ICON_COUNT
 };
 
 /* Rendered on first use and cached for the common sizes (12 to 128 px). */
 const image_t *icon_get(int id, int size);
 void icons_prerender(void (*progress)(int done, int total));
+
+/* icons drawn from a picture instead of vectors, shaped like the other app icons */
+void icons_set_image(int id, const image_t *src);
 
 /* the account picture, cut from the wallpaper; round */
 void icons_set_user_picture(const image_t *wallpaper);

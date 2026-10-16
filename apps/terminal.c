@@ -1,6 +1,8 @@
 /* Command Prompt: an 80x25 console with a small shell over the RAM file system. */
 
 #include "apps.h"
+#include "http.h"
+#include "net.h"
 #include "ramfs.h"
 
 #define COLS       80
@@ -34,6 +36,9 @@ typedef struct {
     int cap_len, cap_size;
     bool capturing;
     scrollbar_t sb;
+    /* a network command still running: curl or nslookup */
+    http_t *job;
+    char lookup[128];
 } term_t;
 
 static const uint32_t palette[16] = {
@@ -355,6 +360,7 @@ static const struct {
     { "cls", "Clear the screen" },
     { "color", "Set console colours, e.g. color 0a" },
     { "cowsay", "Let a cow say something" },
+    { "curl", "Fetch a web page, e.g. curl https://example.com" },
     { "date", "Show today's date" },
     { "del", "Delete a file" },
     { "dir", "List a directory (ls for the short form)" },
@@ -363,10 +369,12 @@ static const struct {
     { "exit", "Close this window" },
     { "help", "Show this list" },
     { "history", "Show previous commands" },
+    { "ipconfig", "Show the network connection" },
     { "lspci", "List PCI devices" },
     { "mem", "Show memory usage" },
     { "mkdir", "Create a directory" },
     { "neofetch", "Show system information with style" },
+    { "nslookup", "Look up a host's address, e.g. nslookup wikipedia.org" },
     { "ren", "Rename a file: ren old new" },
     { "rmdir", "Remove a directory" },
     { "shutdown", "Turn off the computer (/r restarts)" },
@@ -698,6 +706,32 @@ static void exec(term_t *t, window_t *w, char *cmd, char *arg)
         to_dos(t->cwd, dos, sizeof dos);
         tprintf(t, "Folder PATH listing for volume KEPLER\n%s\n", dos);
         tree(t, fs_lookup(t->cwd), prefix, 0);
+    } else if (!strcmp(cmd, "ipconfig") || !strcmp(cmd, "ifconfig")) {
+        char ip[16];
+        net_ip_str(net_ip(), ip, sizeof ip);
+        tprintf(t, "Adapter:  %s\n", net_has_adapter() ? e1000_name() : "(none)");
+        tprintf(t, "Status:   %s\n", net_status());
+        if (net_ready())
+            tprintf(t, "Address:  %s\n", ip);
+    } else if (!strcmp(cmd, "curl") || !strcmp(cmd, "wget")) {
+        if (!*arg) {
+            tputs(t, "usage: curl <address>\n");
+            return;
+        }
+        char url[512];
+        if (strstr(arg, "://"))
+            strlcpy(url, arg, sizeof url);
+        else
+            ksnprintf(url, sizeof url, "https://%s", arg);
+        t->job = http_get(url);
+        wm_set_tick(w, 20);
+    } else if (!strcmp(cmd, "nslookup")) {
+        if (!*arg) {
+            tputs(t, "usage: nslookup <host>\n");
+            return;
+        }
+        strlcpy(t->lookup, arg, sizeof t->lookup);
+        wm_set_tick(w, 20);
     } else if (!strcmp(cmd, "cowsay")) {
         cowsay(t, arg);
     } else if (!strcmp(cmd, "beep")) {
@@ -871,6 +905,12 @@ static void term_key(window_t *w, const input_event_t *ev)
         case 'c':
             render_input(t);
             tputs(t, "^C\n");
+            if (t->job || t->lookup[0]) {
+                http_free(t->job);
+                t->job = NULL;
+                t->lookup[0] = 0;
+                wm_set_tick(w, 530);
+            }
             prompt(t);
             break;
         case 'l':
@@ -912,7 +952,7 @@ static void term_key(window_t *w, const input_event_t *ev)
         }
         t->hist_pos = t->hist_n;
         run(t, w, line);
-        if (!w->dead) {
+        if (!w->dead && !t->job && !t->lookup[0]) {
             if (t->cx)
                 newline(t);
             if (line[0] && strcmp(line, "cls") && strcmp(line, "clear"))
@@ -1000,8 +1040,67 @@ static void term_mouse(window_t *w, int kind, int x, int y, int button)
     }
 }
 
+/* finish a network command when its answer is in */
+static void poll_job(window_t *w, term_t *t)
+{
+    if (t->lookup[0]) {
+        uint32_t ip;
+        int r = dns_resolve(t->lookup, &ip);
+        if (r == DNS_PENDING)
+            return;
+        if (r == DNS_DONE) {
+            char s[16];
+            net_ip_str(ip, s, sizeof s);
+            tprintf(t, "Name:     %s\nAddress:  %s\n", t->lookup, s);
+        } else {
+            tprintf(t, "Can't find %s.\n", t->lookup);
+        }
+        t->lookup[0] = 0;
+    } else {
+        int r = http_poll(t->job);
+        if (r == HTTP_BUSY)
+            return;
+        if (r == HTTP_ERROR) {
+            tprintf(t, "\x1b" "ccurl: %s\x1bx\n", http_error(t->job));
+        } else {
+            int len;
+            const uint8_t *body = http_body(t->job, &len);
+            tprintf(t, "\x1b" "a%s  HTTP %d  %d bytes%s\x1bx\n", http_url(t->job), http_code(t->job), len,
+                    http_secure(t->job) ? "  (secure)" : "");
+            /* the start of the body, with control characters and long lines tamed */
+            int lines = 0, col = 0;
+            for (int i = 0; i < len && lines < 40; i++) {
+                char c = body[i];
+                if (c == '\r')
+                    continue;
+                if (c == '\n' || col >= COLS - 1) {
+                    tputc(t, '\n');
+                    lines++;
+                    col = 0;
+                    if (c == '\n')
+                        continue;
+                }
+                tputc(t, (c >= 32 && c < 127) ? c : '.');
+                col++;
+            }
+            if (lines >= 40)
+                tputs(t, "\n...");
+        }
+        http_free(t->job);
+        t->job = NULL;
+    }
+    if (t->cx)
+        newline(t);
+    newline(t);
+    prompt(t);
+    wm_set_tick(w, 530);
+}
+
 static void term_tick(window_t *w)
 {
+    term_t *t = w->data;
+    if (t->job || t->lookup[0])
+        poll_job(w, t);
     if (wm_active() == w)
         wm_invalidate_client(w);
 }
@@ -1010,6 +1109,7 @@ static void term_close(window_t *w)
 {
     term_t *t = w->data;
     kfree(t->cap);
+    http_free(t->job);
     kfree(t);
 }
 
