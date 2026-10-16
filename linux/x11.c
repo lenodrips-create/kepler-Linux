@@ -974,6 +974,7 @@ void host_launch(const char *program, const char *arg)
     if (pid != 0)
         return;
     setsid();
+    signal(SIGCHLD, SIG_DFL); /* the shell ignores its children; programs must not inherit that */
     /* programs' messages go to a log rather than the shell's */
     int log = open("/tmp/kepler-apps.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (log >= 0) {

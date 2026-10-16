@@ -17,6 +17,7 @@ make -C "$HERE" linux
 # ---- the shell and the session it runs in --------------------------------------------------
 install -D -m755 "$HERE/build/linux/kepler-shell" "$ROOT/usr/lib/kepleros/kepler-shell"
 install -D -m755 "$HERE/linux/session.sh" "$ROOT/usr/lib/kepleros/session"
+install -D -m755 "$HERE/linux/kepler-launch.sh" "$ROOT/usr/local/bin/Kepler"   # found before /usr/bin/Kepler
 cat > "$ROOT/home/kepler/.bash_profile" <<'EOF'
 if [ -z "$DISPLAY" ] && [ "$(tty)" = /dev/tty1 ]; then
     exec startx /usr/lib/kepleros/session -- -nolisten tcp -keeptty vt1 >/tmp/xsession.log 2>&1
@@ -32,6 +33,9 @@ chroot "$ROOT" systemctl mask casper-md5check.service >/dev/null 2>&1 || true
 : > "$ROOT/etc/motd"
 rm -f "$ROOT"/etc/update-motd.d/* 2>/dev/null || true
 touch "$ROOT/home/kepler/.hushlogin"
+chroot "$ROOT" usermod -aG dialout kepler   # lets "kepdebug" boots log to the serial port
+# compressed swap in RAM: a browser on a 2 GB machine gets room to breathe
+printf '[zram0]\nzram-size = ram\ncompression-algorithm = zstd\nswap-priority = 100\n' > "$ROOT/etc/systemd/zram-generator.conf"
 
 # the boot splash: the Kepler planet on black
 install -D -m644 -t "$ROOT/usr/share/plymouth/themes/kepleros" \
@@ -51,7 +55,26 @@ done
 sed -i '/casper-bottom\/\(15autologin\|19keyboard\|20xconfig\|22desktop_settings\|25adduser\|30accessibility\|31disable_update_notifier\|33enable_apport_crashes\|34disable_kde_services\|37disable_screensaver_lubuntu\|40install_driver_updates\|41apt_cdrom\|44pk_allow_ubuntu\|45jackd2\|52gnome_initial_setup\|53disable_unattended_upgrades\|55disable_snap_refresh\|56override_nvidia_udev_rule\|57pollinate\|59disable_mozc_autosetup\|60_create_intaller_logdir\|61desktop_canary_tweaks\)/d' \
     "$ROOT/usr/share/initramfs-tools/scripts/casper-bottom/ORDER" 2>/dev/null || true
 
+# ---- the VM edition -----------------------------------------------------------------------
+# KEPLER_EDITION=vm leaves out device firmware (Wi-Fi chips, graphics cards),
+# which only real PCs load; it is most of the image's size. It comes back
+# after the build.
+STASH=$WORK/stash
+restore() {
+    if [ -d "$STASH/firmware" ]; then
+        rm -rf "$ROOT/usr/lib/firmware"
+        mv "$STASH/firmware" "$ROOT/usr/lib/firmware"
+    fi
+}
+trap restore EXIT
+if [ "${KEPLER_EDITION:-full}" = vm ]; then
+    mkdir -p "$STASH"
+    mv "$ROOT/usr/lib/firmware" "$STASH/firmware"
+    mkdir -p "$ROOT/usr/lib/firmware"
+fi
+
 # ---- boot files ---------------------------------------------------------------------------
+sed -i 's/^COMPRESS=.*/COMPRESS=xz/' "$ROOT/etc/initramfs-tools/initramfs.conf"
 for m in proc sys dev; do mountpoint -q "$ROOT/$m" || mount --bind "/$m" "$ROOT/$m"; done
 chroot "$ROOT" update-initramfs -u >/dev/null
 for m in dev sys proc; do umount -l "$ROOT/$m"; done
@@ -62,8 +85,18 @@ cp -L "$ROOT/boot/vmlinuz" "$ISO/casper/vmlinuz"
 cp -L "$ROOT/boot/initrd.img" "$ISO/casper/initrd"
 echo "KeplerOS live" > "$ISO/.disk/info"
 
-mksquashfs "$ROOT" "$ISO/casper/filesystem.squashfs" -comp xz -b 1M -noappend -no-progress -processors 2 \
-    -wildcards -e 'boot/*' 'proc/*' 'sys/*' 'dev/*' 'run/*' 'tmp/*' 'var/cache/apt/*' 'var/log/*' \
+VM_SKIP=()
+if [ "${KEPLER_EDITION:-full}" = vm ]; then
+    # VMs draw without OpenGL (session.sh), so Mesa's software renderer stays out too
+    VM_SKIP=('usr/lib/x86_64-linux-gnu/libLLVM*' 'usr/lib/x86_64-linux-gnu/libgallium*' 'usr/lib/x86_64-linux-gnu/dri/*'
+             # and what a VM has no use for: Wi-Fi and TV/webcam drivers, the wider Noto fonts
+             # (DejaVu and Liberation stay, as does the emoji font), and non-English translations
+             'usr/lib/modules/*/kernel/drivers/net/wireless' 'usr/lib/modules/*/kernel/drivers/media'
+             'usr/share/fonts/truetype/noto/NotoS*' 'usr/share/qt6/translations/*.qm'
+             'usr/share/qt6/translations/qtwebengine_locales/[!e]*')
+fi
+mksquashfs "$ROOT" "$ISO/casper/filesystem.squashfs" -comp xz -Xbcj x86 -b 1M -noappend -no-progress -processors 2 \
+    -wildcards -e "${VM_SKIP[@]}" 'boot/*' 'proc/*' 'sys/*' 'dev/*' 'run/*' 'tmp/*' 'var/cache/apt/*' 'var/log/*' \
     'home/kepler/.cache' 'home/kepler/.local' 'home/kepler/.config' 'home/kepler/.pki' 'etc/resolv.conf.test' 
 printf '%s' "$(du -sxb "$ROOT" | cut -f1)" > "$ISO/casper/filesystem.size"
 

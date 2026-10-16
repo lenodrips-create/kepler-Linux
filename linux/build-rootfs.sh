@@ -61,7 +61,7 @@ chroot_run apt-get update
 RUNTIME=(
     # boot
     linux-image-generic casper initramfs-tools systemd systemd-sysv systemd-resolved udev dbus dbus-user-session
-    kmod sudo ca-certificates iproute2 locales tzdata plymouth
+    kmod sudo ca-certificates iproute2 locales tzdata plymouth systemd-zram-generator
     # graphics
     xserver-xorg-core xserver-xorg-video-fbdev xserver-xorg-video-vesa xserver-xorg-video-vmware
     xserver-xorg-video-qxl xserver-xorg-video-amdgpu xserver-xorg-video-intel xserver-xorg-input-libinput
@@ -87,6 +87,8 @@ if [ -n "$KEPLER_SRC" ] && [ ! -x "$ROOT/usr/bin/Kepler" ]; then
         && cmake --build build -j"$(nproc)" && cmake --install build'
     rm -rf "$ROOT/tmp/kepler"
     chroot_run apt-get purge -y --auto-remove "${BUILD[@]}"
+    # and the compiler they pulled in (cpp stays: X's xrdb needs it)
+    chroot_run apt-get purge -y --auto-remove gcc gcc-13 binutils libc6-dev libgcc-13-dev linux-libc-dev dpkg-dev make patch
     # purging the -dev packages can take runtime libraries with it
     chroot_run apt-get install -y --no-install-recommends "${RUNTIME[@]}"
 fi
