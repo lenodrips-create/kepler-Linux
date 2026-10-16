@@ -35,6 +35,10 @@ finder_icon_argb:
 terminal_icon_argb:
     .incbin "assets/terminal-icon.bgra"
 .balign 16
+.global linuxterm_icon_argb
+linuxterm_icon_argb:
+    .incbin "assets/linuxterm-icon.bgra"
+.balign 16
 .global notepad_icon_argb
 notepad_icon_argb:
     .incbin "assets/notepad-icon.bgra"

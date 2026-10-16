@@ -18,6 +18,12 @@ make -C "$HERE" linux
 install -D -m755 "$HERE/build/linux/kepler-shell" "$ROOT/usr/lib/kepleros/kepler-shell"
 install -D -m755 "$HERE/linux/session.sh" "$ROOT/usr/lib/kepleros/session"
 install -D -m755 "$HERE/linux/kepler-launch.sh" "$ROOT/usr/local/bin/Kepler"   # found before /usr/bin/Kepler
+# the Linux Terminal (bash in xterm), also the system's terminal for other programs
+install -D -m755 "$HERE/linux/kepler-terminal.sh" "$ROOT/usr/local/bin/kepler-terminal"
+chroot "$ROOT" update-alternatives --quiet --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/local/bin/kepler-terminal 60
+chroot "$ROOT" update-alternatives --quiet --set x-terminal-emulator /usr/local/bin/kepler-terminal
+# the user's own commands, the same in both terminals
+install -D -m755 "$HERE/linux/comp.sh" "$ROOT/usr/local/bin/.comp"
 cat > "$ROOT/home/kepler/.bash_profile" <<'EOF'
 if [ -z "$DISPLAY" ] && [ "$(tty)" = /dev/tty1 ]; then
     exec startx /usr/lib/kepleros/session -- -nolisten tcp -keeptty vt1 >/tmp/xsession.log 2>&1

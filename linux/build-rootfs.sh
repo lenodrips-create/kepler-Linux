@@ -66,6 +66,8 @@ RUNTIME=(
     xserver-xorg-core xserver-xorg-video-fbdev xserver-xorg-video-vesa xserver-xorg-video-vmware
     xserver-xorg-video-qxl xserver-xorg-video-amdgpu xserver-xorg-video-intel xserver-xorg-input-libinput
     xinit x11-xserver-utils libgl1-mesa-dri libegl1 libgles2
+    # the Linux Terminal
+    xterm
     # what the KeplerOS shell links against
     libx11-6 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxcursor1 libxrandr2
     # Kepler's runtime

@@ -48,6 +48,7 @@ enum {
     ICON_FOLDER_APPS,
     ICON_GUEST,
     ICON_BROWSER, /* Kepler: drawn from a picture, see icons_set_image */
+    ICON_LINUXTERM, /* the Linux Terminal (bash), drawn from a picture */
 
     /* white template glyphs: draw them with gfx_blit_tint in any colour */
     GLYPH_KEPLER,

@@ -610,6 +610,9 @@ static void manage(Window xw)
     c->y = r.y;
     c->width = r.w;
     c->height = r.h;
+    /* the frame is the shell's: an X border (xterm has one) would also push a full-screen window
+     * past the screen's edge, where its picture can't be read */
+    XSetWindowBorderWidth(dpy, xw, 0);
     XMoveResizeWindow(dpy, xw, r.x, r.y, r.w, r.h);
     XMapWindow(dpy, xw);
     if (has_atom(xw, atoms[A_NET_WM_STATE], atoms[A_NET_WM_STATE_FULLSCREEN]))
