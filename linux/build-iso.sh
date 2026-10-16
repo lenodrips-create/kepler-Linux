@@ -83,8 +83,13 @@ cp -L "$ROOT/boot/vmlinuz" "$ISO/casper/vmlinuz"
 cp -L "$ROOT/boot/initrd.img" "$ISO/casper/initrd"
 echo "KeplerOS live" > "$ISO/.disk/info"
 
-mksquashfs "$ROOT" "$ISO/casper/filesystem.squashfs" -comp xz -b 1M -noappend -no-progress -processors 2 \
-    -wildcards -e 'boot/*' 'proc/*' 'sys/*' 'dev/*' 'run/*' 'tmp/*' 'var/cache/apt/*' 'var/log/*' \
+VM_SKIP=()
+if [ "${KEPLER_EDITION:-full}" = vm ]; then
+    # VMs draw without OpenGL (session.sh), so Mesa's software renderer stays out too
+    VM_SKIP=('usr/lib/x86_64-linux-gnu/libLLVM*' 'usr/lib/x86_64-linux-gnu/libgallium*' 'usr/lib/x86_64-linux-gnu/dri/*')
+fi
+mksquashfs "$ROOT" "$ISO/casper/filesystem.squashfs" -comp xz -Xbcj x86 -b 1M -noappend -no-progress -processors 2 \
+    -wildcards -e "${VM_SKIP[@]}" 'boot/*' 'proc/*' 'sys/*' 'dev/*' 'run/*' 'tmp/*' 'var/cache/apt/*' 'var/log/*' \
     'home/kepler/.cache' 'home/kepler/.local' 'home/kepler/.config' 'home/kepler/.pki' 'etc/resolv.conf.test' 
 printf '%s' "$(du -sxb "$ROOT" | cut -f1)" > "$ISO/casper/filesystem.size"
 
