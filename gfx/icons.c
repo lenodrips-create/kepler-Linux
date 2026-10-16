@@ -1354,11 +1354,85 @@ static int size_slot(int size)
 }
 
 static const image_t *pictures[ICON_COUNT];
+static bool picture_plain[ICON_COUNT]; /* has its own shape: drawn as it is */
 
 void icons_set_image(int id, const image_t *src)
 {
     if (id >= 0 && id < ICON_COUNT)
         pictures[id] = src;
+}
+
+void icons_set_image_plain(int id, const image_t *src)
+{
+    if (id >= 0 && id < ICON_COUNT) {
+        pictures[id] = src;
+        picture_plain[id] = true;
+    }
+}
+
+/* scaled with premultiplied alpha so transparent edges don't darken */
+static image_t *resize_alpha(const image_t *src, int w, int h)
+{
+    image_t *pm = image_new(src->w, src->h);
+    for (int i = 0; i < src->w * src->h; i++) {
+        uint32_t c = src->px[i], a = c >> 24;
+        pm->px[i] = a << 24 | (((c >> 16) & 255) * a / 255) << 16 | (((c >> 8) & 255) * a / 255) << 8 | (c & 255) * a / 255;
+    }
+    image_t *out = image_resize(pm, w, h);
+    image_free(pm);
+    for (int i = 0; i < w * h; i++) {
+        uint32_t c = out->px[i], a = c >> 24;
+        if (!a) {
+            out->px[i] = 0;
+            continue;
+        }
+        uint32_t r = MIN(255u, ((c >> 16) & 255) * 255 / a), g = MIN(255u, ((c >> 8) & 255) * 255 / a),
+                 b = MIN(255u, (c & 255) * 255 / a);
+        out->px[i] = a << 24 | r << 16 | g << 8 | b;
+    }
+    return out;
+}
+
+/* the apps' icons are white: colour drained, lightened, detail kept in soft greys */
+static bool whitened(int id)
+{
+    switch (id) {
+    case ICON_CMD:
+    case ICON_NOTEPAD:
+    case ICON_CALC:
+    case ICON_PAINT:
+    case ICON_MINES:
+    case ICON_TASKMGR:
+    case ICON_PICTURES:
+    case ICON_DISPLAY:
+    case ICON_ALLPROGS:
+    case ICON_SYSINFO:
+        return true;
+    }
+    return false;
+}
+
+static int luma(uint32_t c) { return ((int)((c >> 16) & 255) * 77 + (int)((c >> 8) & 255) * 151 + (int)(c & 255) * 28) >> 8; }
+
+static void whiten(image_t *img)
+{
+    /* a dark icon (Terminal, Calculator...) is turned inside out first, so every
+     * tile comes out white with its drawing in soft greys */
+    uint64_t sum = 0, weight = 0;
+    for (int i = 0; i < img->w * img->h; i++) {
+        uint32_t a = img->px[i] >> 24;
+        sum += (uint64_t)luma(img->px[i]) * a;
+        weight += a;
+    }
+    bool dark = weight && sum / weight < 140;
+    for (int i = 0; i < img->w * img->h; i++) {
+        uint32_t c = img->px[i], a = c >> 24;
+        int lum = luma(c);
+        if (dark)
+            lum = 255 - lum;
+        int v = 255 - (255 - lum) * 62 / 100;
+        img->px[i] = a << 24 | (uint32_t)v << 16 | (uint32_t)v << 8 | (uint32_t)v;
+    }
 }
 
 /* a picture scaled onto the app-icon squircle */
@@ -1381,10 +1455,16 @@ static image_t *render(int id, int size)
     cv.img = image_new(size, size);
     cv.g = gfx_for_image(cv.img);
     cv.size = size;
+    if (pictures[id] && picture_plain[id]) {
+        image_free(cv.img);
+        return resize_alpha(pictures[id], size, size);
+    }
     if (pictures[id])
         draw_picture(&cv, pictures[id]);
     else if (icon_fns[id])
         icon_fns[id](&cv);
+    if (whitened(id))
+        whiten(cv.img);
     return cv.img;
 }
 
@@ -1426,8 +1506,8 @@ static image_t *user_src;
 
 void icons_set_user_picture(const image_t *wall)
 {
-    /* the green globe in the right half of the wallpaper */
-    int cx = wall->w * 1022 / 1280, cy = wall->h * 300 / 800, r = wall->h * 230 / 800;
+    /* the ladybug flying in the middle of the wallpaper (1920x1200 picture, cropped to the screen) */
+    int cx = wall->w / 2 - wall->h * 25 / 1200, cy = wall->h * 495 / 1200, r = wall->h * 105 / 1200;
     int side = 2 * r;
     image_free(user_src);
     user_src = image_new(side, side);

@@ -7,7 +7,12 @@ static window_t *active;
 static int next_id = 1;
 static int cascade;
 
-enum { HT_NONE, HT_CLIENT, HT_CAPTION, HT_CLOSE, HT_MAX, HT_MIN, HT_L, HT_R, HT_T, HT_B, HT_TL, HT_TR, HT_BL, HT_BR };
+enum { HT_NONE, HT_CLIENT, HT_CAPTION, HT_CLOSE, HT_MAX, HT_MIN, HT_L, HT_R, HT_T, HT_B, HT_TL, HT_TR, HT_BL, HT_BR,
+       HT_MENU0 = 100 };
+
+/* with no menu bar across the screen, a window's menus sit in its own title bar */
+#define MENU_X0  78
+#define MENU_PAD 18
 enum { DRAG_NONE, DRAG_MOVE, DRAG_RESIZE, DRAG_BUTTON, DRAG_CLIENT };
 
 /* the active window's shadow; inactive ones get a tighter, lighter one */
@@ -55,6 +60,8 @@ static rect_t frame_rect(const window_t *w) { return rect_make(w->x, w->y, w->w,
 /* everything a window paints, shadow included */
 static rect_t outer_rect(const window_t *w)
 {
+    if (w->flags & WF_FULLSCREEN)
+        return rect_make(w->x, w->y, w->w, w->h);
     return rect_make(w->x - SH_BLUR, w->y - SH_BLUR + SH_DY, w->w + 2 * SH_BLUR, w->h + 2 * SH_BLUR);
 }
 
@@ -155,11 +162,38 @@ void wm_hide_app(const char *app)
 
 /* ---- geometry ------------------------------------------------------------------- */
 
-static int caption_h(const window_t *w) { return (w->flags & WF_UNIFIED) ? w->caption_h : TITLE_H; }
+static int caption_h(const window_t *w)
+{
+    if (w->flags & WF_FULLSCREEN)
+        return 0;
+    return (w->flags & WF_UNIFIED) ? w->caption_h : TITLE_H;
+}
+
+static bool has_menus(const window_t *w)
+{
+    return w->menus && w->menus->n > 0 && !(w->flags & (WF_UNIFIED | WF_FULLSCREEN));
+}
+
+/* local coordinates of title-bar menu i */
+static rect_t menu_title_rect(const window_t *w, int i)
+{
+    int x = MENU_X0;
+    for (int k = 0; k < i; k++)
+        x += text_width(&font_menu, w->menus->entries[k].title) + MENU_PAD;
+    return rect_make(x, 4, text_width(&font_menu, w->menus->entries[i].title) + MENU_PAD, TITLE_H - 8);
+}
+
+static int menus_end(const window_t *w)
+{
+    if (!has_menus(w))
+        return 70;
+    rect_t r = menu_title_rect(w, w->menus->n - 1);
+    return r.x + r.w + 12;
+}
 
 rect_t wm_client_rect(const window_t *w)
 {
-    if (w->flags & WF_UNIFIED)
+    if (w->flags & (WF_UNIFIED | WF_FULLSCREEN))
         return frame_rect(w);
     return rect_make(w->x, w->y + TITLE_H, w->w, w->h - TITLE_H);
 }
@@ -183,6 +217,8 @@ static bool light_enabled(const window_t *w, int i)
 static int hit_test(window_t *w, int x, int y)
 {
     int lx = x - w->x, ly = y - w->y;
+    if (w->flags & WF_FULLSCREEN)
+        return (lx < 0 || ly < 0 || lx >= w->w || ly >= w->h) ? HT_NONE : HT_CLIENT;
     bool sizing = (w->flags & WF_RESIZABLE) && !(w->flags & WF_MAXIMIZED);
     if (sizing) {
         if (lx < -GRIP_OUT || ly < -GRIP_OUT || lx >= w->w + GRIP_OUT || ly >= w->h + GRIP_OUT)
@@ -214,6 +250,9 @@ static int hit_test(window_t *w, int x, int y)
                 return i == 0 ? HT_CLOSE : i == 1 ? HT_MIN : HT_MAX;
         if ((w->flags & WF_UNIFIED) && w->ops->caption_hit && w->ops->caption_hit(w, lx, ly))
             return HT_CLIENT;
+        for (int i = 0; has_menus(w) && i < w->menus->n; i++)
+            if (rect_contains(menu_title_rect(w, i), lx, ly))
+                return HT_MENU0 + i;
         return HT_CAPTION;
     }
     return HT_CLIENT;
@@ -375,6 +414,10 @@ void wm_close(window_t *w)
 {
     if (!w || w->dead)
         return;
+    if (w->ops->close_request && !w->closing) {
+        w->ops->close_request(w);
+        return;
+    }
     if (w->modal && wm_alive(w->modal))
         wm_close(w->modal);
     invalidate_outer(w);
@@ -463,9 +506,19 @@ static void paint_titlebar(gfx_t *g, window_t *w, bool act)
     else
         gfx_fill(g, 0, 0, W, TITLE_H, HEX(0xF6F6F6));
     gfx_hline(g, 0, TITLE_H - 1, W, act ? HEX(0xD1D1D1) : HEX(0xE2E2E2));
-    /* centred on the window, but never under the traffic lights */
+    if (has_menus(w)) {
+        const menu_item_t *open = menu_current();
+        for (int i = 0; i < w->menus->n; i++) {
+            rect_t r = menu_title_rect(w, i);
+            if (open && open == w->menus->entries[i].items)
+                gfx_round_rect(g, r.x, r.y, r.w, r.h, 5, RGBA(0, 0, 0, 30), CORNER_ALL);
+            gfx_text(g, &font_menu, r.x + MENU_PAD / 2, (TITLE_H - font_menu.height) / 2, w->menus->entries[i].title,
+                     act ? HEX(0x1D1D1F) : HEX(0xA0A0A0));
+        }
+    }
+    /* centred on the window, but never under the traffic lights or the menus */
     int tw = text_width(&font_title, w->title);
-    int tx = MAX(70, (W - tw) / 2);
+    int tx = MAX(menus_end(w), (W - tw) / 2);
     int ty = (TITLE_H - font_title.height) / 2;
     gfx_text_clipped(g, &font_title, tx, ty, W - 12 - tx, w->title, act ? HEX(0x404040) : HEX(0xB2B2B2));
 }
@@ -504,6 +557,13 @@ static void paint_lights(gfx_t *g, window_t *w, bool act)
 
 static void paint_window(gfx_t *g, window_t *w, bool act, bool shadow)
 {
+    if (w->flags & WF_FULLSCREEN) {
+        gfx_t cg = gfx_sub(g, w->x, w->y, w->w, w->h);
+        gfx_fill(&cg, 0, 0, w->w, w->h, w->bg);
+        if (w->ops->paint)
+            w->ops->paint(w, &cg, w->w, w->h);
+        return;
+    }
     if (shadow) {
         if (act)
             gfx_shadow(g, w->x, w->y, w->w, w->h, CR, SH_BLUR, SH_DY, 78);
@@ -589,6 +649,10 @@ void wm_toggle_maximize(window_t *w)
 {
     if ((w->flags & (WF_DIALOG | WF_NO_MAX)))
         return;
+    if (w->flags & WF_FULLSCREEN) {
+        wm_set_fullscreen(w, false);
+        return;
+    }
     invalidate_outer(w);
     if (w->flags & WF_MAXIMIZED) {
         w->flags &= ~WF_MAXIMIZED;
@@ -608,6 +672,37 @@ void wm_toggle_maximize(window_t *w)
     invalidate_outer(w);
     if (w->ops->resized)
         w->ops->resized(w);
+}
+
+void wm_set_fullscreen(window_t *w, bool on)
+{
+    if (!w || w->dead || on == !!(w->flags & WF_FULLSCREEN))
+        return;
+    invalidate_outer(w);
+    if (on) {
+        w->restore = frame_rect(w);
+        w->flags |= WF_FULLSCREEN;
+        w->x = w->y = 0;
+        w->w = g_screen.w;
+        w->h = g_screen.h;
+        wm_focus(w);
+    } else {
+        w->flags &= ~WF_FULLSCREEN;
+        w->x = w->restore.x;
+        w->y = w->restore.y;
+        w->w = w->restore.w;
+        w->h = w->restore.h;
+    }
+    ui_invalidate_all();
+    if (w->ops->resized)
+        w->ops->resized(w);
+    shell_windows_changed();
+}
+
+window_t *wm_fullscreen(void)
+{
+    window_t *a = active;
+    return a && !a->dead && (a->flags & WF_FULLSCREEN) && !(a->flags & WF_MINIMIZED) ? a : NULL;
 }
 
 void wm_restore(window_t *w)
@@ -703,6 +798,37 @@ static void do_resize(int x, int y)
 
 bool wm_dragging(void) { return drag.mode != DRAG_NONE; }
 
+static window_t *menu_win;
+static const menu_item_t *menu_shown;
+
+static void open_title_menu(window_t *w, int i);
+
+/* dragging along the title bar with a menu open switches menus */
+static void menu_slide(int x, int y)
+{
+    window_t *w = menu_win;
+    if (!w || !wm_alive(w) || !has_menus(w))
+        return;
+    for (int i = 0; i < w->menus->n; i++) {
+        rect_t r = menu_title_rect(w, i);
+        if (rect_contains(r, x - w->x, y - w->y) && menu_current() != w->menus->entries[i].items) {
+            open_title_menu(w, i);
+            return;
+        }
+    }
+}
+
+static void open_title_menu(window_t *w, int i)
+{
+    rect_t r = menu_title_rect(w, i);
+    const menubar_entry_t *e = &w->menus->entries[i];
+    menu_open_bar(e->items, e->n, w->x + r.x, w->y + TITLE_H - 2, w->menu_fn, w->menu_ctx, rect_make(w->x, w->y, w->w, TITLE_H),
+                  menu_slide);
+    menu_win = w;
+    menu_shown = e->items;
+    ui_invalidate(rect_make(w->x, w->y, w->w, TITLE_H));
+}
+
 bool wm_mouse(int kind, int x, int y, int buttons, int button)
 {
     if (drag.mode != DRAG_NONE) {
@@ -795,6 +921,10 @@ bool wm_mouse(int kind, int x, int y, int buttons, int button)
         }
         if (kind == MS_DOWN && w != active)
             wm_focus(w);
+        if (ht >= HT_MENU0 && kind == MS_DOWN) {
+            open_title_menu(w, ht - HT_MENU0);
+            return true;
+        }
         switch (ht) {
         case HT_CAPTION:
             if (kind == MS_DBLCLICK) {
@@ -852,6 +982,14 @@ void wm_key(const input_event_t *ev)
 void wm_tick(void)
 {
     uint32_t now = timer_ms();
+    /* a title-bar menu closed: drop its highlight */
+    if (menu_win && menu_current() != menu_shown) {
+        if (wm_alive(menu_win))
+            ui_invalidate(rect_make(menu_win->x, menu_win->y, menu_win->w, TITLE_H));
+        menu_shown = menu_current();
+        if (!menu_shown)
+            menu_win = NULL;
+    }
     for (window_t *w = bottom; w; w = w->next) {
         if (w->dead || !w->tick_ms || !w->ops->tick)
             continue;

@@ -12,7 +12,9 @@
 #define BOTTOM  6
 #define RADIUS  17
 
-enum { S_APP, S_RUNNING, S_SEP, S_MIN, S_TRASH };
+enum { S_APP, S_RUNNING, S_SEP, S_MIN, S_TRASH, S_KEPLER, S_CLOCK };
+
+#define CLOCK_W 92
 
 typedef struct {
     int kind;
@@ -49,6 +51,8 @@ static bool trash_full(void)
 static void build(void)
 {
     n_slots = 0;
+    slots[n_slots++] = (slot_t){ S_KEPLER, NULL, NULL, 0, SLOT };
+    slots[n_slots++] = (slot_t){ S_SEP, NULL, NULL, 0, SEP_W };
     for (int i = 0; i < g_app_count; i++)
         if (g_apps[i].in_dock)
             slots[n_slots++] = (slot_t){ S_APP, &g_apps[i], NULL, 0, SLOT };
@@ -71,6 +75,8 @@ static void build(void)
         if (!w->dead && (w->flags & WF_MINIMIZED) && !(w->flags & WF_NO_TASKBAR))
             slots[n_slots++] = (slot_t){ S_MIN, NULL, w, 0, SLOT };
     slots[n_slots++] = (slot_t){ S_TRASH, NULL, NULL, 0, SLOT };
+    slots[n_slots++] = (slot_t){ S_SEP, NULL, NULL, 0, SEP_W };
+    slots[n_slots++] = (slot_t){ S_CLOCK, NULL, NULL, 0, CLOCK_W };
 
     int total = 2 * PAD - (SLOT - ICON);
     for (int i = 0; i < n_slots; i++)
@@ -117,6 +123,8 @@ static const char *slot_name(const slot_t *s)
     case S_RUNNING: return s->win->app;
     case S_MIN: return s->win->title;
     case S_TRASH: return "Trash";
+    case S_KEPLER: return "KeplerOS";
+    case S_CLOCK: return "";
     }
     return "";
 }
@@ -141,6 +149,26 @@ void dock_paint(gfx_t *g, rect_t dirty)
         int ix = s->x + (s->w - ICON) / 2;
         if (s->kind == S_SEP) {
             gfx_vline(g, s->x + s->w / 2, a.y + 10, a.h - 20, RGBA(0, 0, 0, 50));
+            continue;
+        }
+        if (s->kind == S_KEPLER) {
+            bool hot = hover == i || pressed == i;
+            gfx_round_rect(g, ix + 4, iy + 4, ICON - 8, ICON - 8, 12, hot ? RGBA(255, 255, 255, 150) : RGBA(255, 255, 255, 90),
+                           CORNER_ALL);
+            gfx_blit_tint(g, ix + (ICON - 26) / 2, iy + (ICON - 26) / 2, icon_get(GLYPH_KEPLER, 26), HEX(0x1D1D1F));
+            continue;
+        }
+        if (s->kind == S_CLOCK) {
+            static const char *days[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+            static const char *months[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+            datetime_t dt;
+            rtc_read(&dt);
+            char t[16], d[24];
+            ksnprintf(t, sizeof t, "%d:%02d %s", dt.hour % 12 ? dt.hour % 12 : 12, dt.minute, dt.hour < 12 ? "AM" : "PM");
+            ksnprintf(d, sizeof d, "%s %s %d", days[dt.weekday % 7], months[(dt.month + 11) % 12], dt.day);
+            int cx = s->x, cw = s->w - 8;
+            gfx_text_centered(g, &font_menu_bold, cx, iy + 6, cw, t, COL_TEXT);
+            gfx_text_centered(g, &font_ui, cx, iy + 27, cw, d, HEX(0x3A3A3C));
             continue;
         }
         int dy = 0;
@@ -176,7 +204,7 @@ void dock_paint(gfx_t *g, rect_t dirty)
     }
 
     /* the name of the hovered item, floating above it */
-    if (hover >= 0 && hover < n_slots && slots[hover].kind != S_SEP) {
+    if (hover >= 0 && hover < n_slots && slots[hover].kind != S_SEP && slots[hover].kind != S_CLOCK) {
         const char *name = slot_name(&slots[hover]);
         int tw = MIN(text_width(&font_menu, name), 300);
         int w = tw + 22, h = 24;
@@ -248,6 +276,12 @@ static void activate(int i)
         launchpad_close();
         ui_launch("trash");
         break;
+    case S_KEPLER:
+        launchpad_close();
+        kepler_menu_open(s->x + 4, area.y - 8);
+        break;
+    case S_CLOCK:
+        break;
     }
 }
 
@@ -299,7 +333,7 @@ bool dock_mouse(int kind, int x, int y, int button)
         ui_invalidate(area);
         if (p >= 0 && p == h)
             activate(h);
-    } else if (kind == MS_DOWN && button == MOUSE_RIGHT && h >= 0) {
+    } else if (kind == MS_DOWN && button == MOUSE_RIGHT && h >= 0 && slots[h].kind != S_CLOCK && slots[h].kind != S_KEPLER) {
         slot_t *s = &slots[h];
         menu_slot = h;
         strlcpy(menu_app, slot_name(s), sizeof menu_app);

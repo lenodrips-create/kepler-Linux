@@ -211,14 +211,16 @@ def main():
     ap.add_argument('--outdir', default='shots')
     ap.add_argument('--mem', default='256M')
     ap.add_argument('--iso', help='boot this CD image instead of the kernel')
+    ap.add_argument('--linux', action='store_true', help='the image is the 64-bit Linux-based KeplerOS')
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix='kepler-qemu-')
     sock = os.path.join(tmp, 'qmp.sock')
     log = os.path.join(tmp, 'serial.log')
+    machine = ['qemu-system-x86_64', '-smp', '4', '-cpu', 'max'] if args.linux else ['qemu-system-i386']
     proc = subprocess.Popen([
-        'qemu-system-i386', *(['-cdrom', args.iso] if args.iso else ['-kernel', args.kernel]), '-m', args.mem, '-vga', 'std',
+        *machine, *(['-cdrom', args.iso] if args.iso else ['-kernel', args.kernel]), '-m', args.mem, '-vga', 'std',
         '-display', 'none', '-serial', f'file:{log}', '-qmp', f'unix:{sock},server,nowait',
         '-rtc', 'base=localtime', '-no-reboot', '-nic', 'user,model=e1000',
     ])

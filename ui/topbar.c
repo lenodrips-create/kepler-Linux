@@ -243,6 +243,13 @@ static void command(int id, void *ctx)
     }
 }
 
+/* the KeplerOS menu, opened from the dock now that there is no menu bar */
+void kepler_menu_open(int x, int y)
+{
+    ksnprintf(logout_label, sizeof logout_label, "Log Out %s...", g_user_name);
+    menu_open(kepler_menu, ARRAY_LEN(kepler_menu), x, y, command, NULL);
+}
+
 static void open_menu(int h);
 
 /* dragging along the bar with a menu open switches menus */
@@ -356,5 +363,6 @@ void topbar_tick(void)
     if (dt.minute != last_minute) {
         last_minute = dt.minute;
         topbar_changed();
+        ui_invalidate(dock_rect()); /* the clock lives in the dock */
     }
 }

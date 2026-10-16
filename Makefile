@@ -57,7 +57,45 @@ build/%.o: %.S
 	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 # .incbin isn't seen by -MMD
-build/assets/assets.o: assets/stockwallpaper assets/kepler-icon.jpg assets/kepler-logo.jpg
+build/assets/assets.o: assets/stockwallpaper assets/kepler-icon.jpg assets/kepler-logo.jpg assets/finder-icon.bgra
+
+# ---- KeplerOS on Linux: the shell as an X11 program and window manager ----------
+# (linux/build-iso.sh turns it and Ubuntu into the bootable image)
+
+HOST_CC     := gcc
+HOST_CFLAGS := -std=gnu11 -O2 -g -DKEPLER_HOSTED -fno-strict-aliasing \
+               -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers \
+               -Ikernel -Idrivers -Igfx -Iui -Ifs -Iapps -Inet -Ilinux -Ithird_party/bearssl/inc
+HOST_LIBS   := -lX11 -lXext -lXcomposite -lXdamage -lXfixes -lXcursor -lpthread
+HOST_SRCS   := kernel/lib.c $(wildcard gfx/*.c ui/*.c fs/*.c linux/*.c) \
+               $(filter-out apps/browser.c apps/html.c,$(wildcard apps/*.c)) \
+               net/http.c net/inflate.c net/entropy.c net/ca_roots.c
+HOST_OBJS   := $(patsubst %.c,build/linux/%.o,$(HOST_SRCS)) build/linux/assets/assets.o
+HOST_BEAR   := $(patsubst %.c,build/linux/%.o,$(BEAR_SRCS))
+
+.PHONY: linux
+linux: build/linux/kepler-shell
+
+build/linux/kepler-shell: $(HOST_OBJS) build/linux/libbearssl.a
+	@$(HOST_CC) -o $@ $(HOST_OBJS) build/linux/libbearssl.a $(HOST_LIBS)
+	@echo "built $@"
+
+build/linux/libbearssl.a: $(HOST_BEAR)
+	@rm -f $@
+	@ar rcs $@ $(HOST_BEAR)
+
+build/linux/third_party/%.o: third_party/%.c
+	@mkdir -p $(dir $@)
+	@$(HOST_CC) -O2 -w -Ithird_party/bearssl/inc -Ithird_party/bearssl/src -MMD -MP -c $< -o $@
+
+build/linux/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "  CC  $< (linux)"
+	@$(HOST_CC) $(HOST_CFLAGS) -MMD -MP -c $< -o $@
+
+build/linux/assets/assets.o: assets/assets.S assets/stockwallpaper assets/kepler-icon.jpg assets/kepler-logo.jpg assets/finder-icon.bgra
+	@mkdir -p $(dir $@)
+	@$(HOST_CC) -c $< -o $@
 
 run: build/kepler.elf
 	$(QEMU) -kernel $< $(QEMU_FLAGS)
@@ -72,4 +110,4 @@ iso: build/kepler.elf
 clean:
 	rm -rf build
 
--include $(OBJS:.o=.d) $(BEAR_OBJS:.o=.d)
+-include $(OBJS:.o=.d) $(BEAR_OBJS:.o=.d) $(HOST_OBJS:.o=.d) $(HOST_BEAR:.o=.d)

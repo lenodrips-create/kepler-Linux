@@ -100,6 +100,8 @@ void icons_prerender(void (*progress)(int done, int total));
 
 /* icons drawn from a picture instead of vectors, shaped like the other app icons */
 void icons_set_image(int id, const image_t *src);
+/* a picture with its own shape and transparency, used as the icon unchanged */
+void icons_set_image_plain(int id, const image_t *src);
 
 /* the account picture, cut from the wallpaper; round */
 void icons_set_user_picture(const image_t *wallpaper);

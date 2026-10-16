@@ -22,3 +22,11 @@ kepler_icon_jpg_end:
 kepler_logo_jpg:
     .incbin "assets/kepler-logo.jpg"
 kepler_logo_jpg_end:
+
+/* Finder: the Explorer folders icon, 256x256 ARGB (one 32-bit word per pixel) */
+.balign 16
+.global finder_icon_argb
+finder_icon_argb:
+    .incbin "assets/finder-icon.bgra"
+
+.section .note.GNU-stack,"",@progbits

@@ -4,11 +4,53 @@ this is a newly based os made by Lennon Helman and with the help of claude code
 
 ![KeplerOS desktop](docs/screenshots/desktop.png)
 
-KeplerOS is a small 32-bit x86 operating system written in C. It boots
-straight into a graphical desktop styled after macOS Big Sur, with the
-green-globe photo in `assets/stockwallpaper` as its wallpaper. Everything on
-screen is drawn by the kernel itself: there is no libc, no bootloader code of
-its own (it is a Multiboot kernel) and no external graphics or font libraries.
+KeplerOS boots straight into its own graphical desktop: a sign-in screen,
+a dock, Finder, Terminal and the other apps, over the ladybug picture in
+`assets/stockwallpaper`. It comes in two forms built from the same desktop
+code:
+
+- **KeplerOS on Linux** (the main image). Ubuntu 24.04 runs underneath, so
+  it has real drivers, networking and sound. The KeplerOS shell is the whole
+  desktop and the window manager. It ships with the real
+  [Kepler](https://github.com/lenodrips-create/kepler) web browser (Qt 6 +
+  Chromium), which shows full websites.
+- **The original kernel.** A small 32-bit x86 operating system written from
+  scratch in C, with no libc and no external libraries. Its desktop is drawn
+  by the kernel itself and it has its own simple browser. It is still built
+  from this repository with `make`.
+
+## KeplerOS on Linux
+
+- **The shell** (`linux/`) is the same desktop code built as a 64-bit X11
+  program. It draws the whole screen into the Composite overlay window,
+  exactly as it drew into the framebuffer on bare metal.
+- **Other programs' windows**, like Kepler, are redirected off-screen. The
+  shell gives them a normal KeplerOS window: title bar, shadow, dock entry,
+  minimise and zoom. Their contents are copied in whenever they change.
+- **Input:** clicks and typing go straight to the program wherever its window
+  is on top. Everywhere else they go to the shell, through an input-only
+  window with holes in it.
+- **Full screen:** full-screen video and pop-up menus work.
+- **The desktop:** there is no menu bar for now. Each window's menus are in
+  its own title bar, and the dock holds the KeplerOS menu (left) and the
+  clock (right). App icons are white, and Finder uses the Explorer folder
+  icon.
+- **Kepler** is in the dock. Spotlight's "Search the Web" opens it with your
+  search.
+
+Build it on Ubuntu (as root; it downloads about 1 GB of packages):
+
+```sh
+git clone https://github.com/lenodrips-create/kepler ../kepler
+sudo linux/build-rootfs.sh /var/tmp/kos ../kepler    # Ubuntu + Kepler, compiled in a chroot
+sudo linux/build-iso.sh /var/tmp/kos kepleros.iso    # adds the shell, makes a BIOS+UEFI live image
+```
+
+Run the image in a virtual machine:
+- **Machine:** 64-bit, at least 4 GB of RAM and 2 CPUs. Any network adapter
+  type works.
+- **Screen size:** in a VM the shell switches to 1600x900 when the screen
+  starts smaller. On a real PC it keeps the monitor's own resolution.
 
 ## What's inside
 

@@ -2,6 +2,8 @@
 
 #include "kernel.h"
 
+#ifndef KEPLER_HOSTED /* on Linux these come from the C library */
+
 void *memset(void *dst, int c, size_t n)
 {
     uint8_t *d = dst;
@@ -18,10 +20,19 @@ void *memset(void *dst, int c, size_t n)
     return dst;
 }
 
+#endif
+
 void memset32(uint32_t *dst, uint32_t v, size_t n)
 {
+#ifdef KEPLER_HOSTED
+    while (n--)
+        *dst++ = v;
+#else
     __asm__ volatile("rep stosl" : "+D"(dst), "+c"(n) : "a"(v) : "memory");
+#endif
 }
+
+#ifndef KEPLER_HOSTED
 
 void *memcpy(void *dst, const void *src, size_t n)
 {
@@ -93,12 +104,15 @@ int strncmp(const char *a, const char *b, size_t n)
     return 0;
 }
 
+#endif
+
 int ktolower(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
 int ktoupper(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
 bool kisdigit(int c) { return c >= '0' && c <= '9'; }
 bool kisspace(int c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 bool kisalpha(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
 
+#ifndef KEPLER_HOSTED
 int strcasecmp(const char *a, const char *b)
 {
     while (*a && ktolower(*a) == ktolower(*b)) {
@@ -166,6 +180,8 @@ size_t strlcat(char *dst, const char *src, size_t n)
     return d + strlcpy(dst + d, src, n - d);
 }
 
+#endif
+
 char *kstrdup(const char *s)
 {
     size_t n = strlen(s) + 1;
@@ -191,6 +207,7 @@ int katoi(const char *s)
     return v * sign;
 }
 
+#ifndef KEPLER_HOSTED
 /* ---- 64-bit division helpers normally provided by libgcc ---------------- */
 
 uint64_t __udivmoddi4(uint64_t num, uint64_t den, uint64_t *rem)
@@ -232,6 +249,8 @@ int64_t __moddi3(int64_t a, int64_t b)
     __udivmoddi4(a < 0 ? -(uint64_t)a : (uint64_t)a, b < 0 ? -(uint64_t)b : (uint64_t)b, &r);
     return a < 0 ? -(int64_t)r : (int64_t)r;
 }
+
+#endif
 
 /* ---- printf ---------------------------------------------------------------- */
 
@@ -313,8 +332,12 @@ int kvsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
             lng++;
             fmt++;
         }
-        if (*fmt == 'z')
+        if (*fmt == 'z') {
+            lng = sizeof(size_t) == 8 ? 2 : 0;
             fmt++;
+        } else if (lng == 1 && sizeof(long) == 8) {
+            lng = 2;
+        }
         switch (*fmt) {
         case 'd':
         case 'i': {
@@ -379,6 +402,7 @@ int ksnprintf(char *buf, size_t n, const char *fmt, ...)
     return r;
 }
 
+#ifndef KEPLER_HOSTED
 void kprintf(const char *fmt, ...)
 {
     char buf[512];
@@ -406,6 +430,8 @@ void panic(const char *fmt, ...)
     for (;;)
         cpu_hlt();
 }
+
+#endif
 
 /* ---- xorshift PRNG --------------------------------------------------------- */
 

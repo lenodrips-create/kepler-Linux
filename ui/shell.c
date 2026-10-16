@@ -32,7 +32,9 @@ static rect_t tip_rect;
 
 static uint32_t beep_until;
 
+#ifndef KEPLER_HOSTED
 extern volatile int cpu_idle;
+#endif
 
 /* ---- invalidation & composition ------------------------------------------------------ */
 
@@ -149,9 +151,13 @@ static void compose(void)
             launchpad_paint(&g, dirty);
         else
             topbar_paint(&g, dirty);
-        dock_paint(&g, dirty);
+        if (!wm_fullscreen())
+            dock_paint(&g, dirty);
         spotlight_paint(&g);
         menu_paint(&g);
+#ifdef KEPLER_HOSTED
+        host_paint_popups(&g, dirty);
+#endif
         tooltip_paint(&g);
         overlay_paint(&g, dirty);
         break;
@@ -159,9 +165,15 @@ static void compose(void)
         gfx_fill(&g, 0, 0, g_screen.w, g_screen.h, HEX(0x000000));
         break;
     }
+#ifdef KEPLER_HOSTED
+    /* X draws the pointer */
+    host_set_cursor(mode == MODE_STANDBY ? -1 : cursor);
+    cursor_rect = rect_make(0, 0, 0, 0);
+#else
     if (mode != MODE_STANDBY)
         cursor_draw(&g, cursor, mx, my);
     cursor_rect = cursor_bounds(cursor, mx, my);
+#endif
     video_flush(dirty);
     dirty = rect_make(0, 0, 0, 0);
 }
@@ -170,6 +182,11 @@ static void compose(void)
 
 void ui_beep(int hz, int ms)
 {
+#ifdef KEPLER_HOSTED
+    (void)hz, (void)ms;
+    host_beep();
+    return;
+#endif
     uint32_t div = 1193180 / hz;
     outb(0x43, 0xB6);
     outb(0x42, div & 0xFF);
@@ -182,6 +199,9 @@ void ui_beep(int hz, int ms)
 
 static void beep_update(void)
 {
+#ifdef KEPLER_HOSTED
+    return;
+#endif
     if (beep_until && (int32_t)(timer_ms() - beep_until) >= 0) {
         outb(0x61, inb(0x61) & 0xFC);
         beep_until = 0;
@@ -215,7 +235,11 @@ void ui_launch(const char *cmd)
     if (!strcmp(name, "notepad") || !strcmp(name, "edit") || !strcmp(name, "textedit"))
         notepad_open(*arg ? arg : NULL);
     else if (!strcmp(name, "kepler") || !strcmp(name, "browser") || !strcmp(name, "safari") || !strcmp(name, "web"))
+#ifdef KEPLER_HOSTED
+        host_launch("Kepler", *arg == '?' ? arg + 1 : arg);
+#else
         browser_open(*arg ? arg : NULL);
+#endif
     else if (!strcmp(name, "calc") || !strcmp(name, "calculator"))
         calc_open();
     else if (!strcmp(name, "cmd") || !strcmp(name, "terminal"))
@@ -322,6 +346,13 @@ static void wake(void)
 }
 
 bool ui_overlay_active(void) { return overlay_is_open(); }
+
+bool ui_desktop_shown(void) { return mode == MODE_DESKTOP && !launchpad_is_open() && !overlay_is_open(); }
+
+bool ui_wants_keyboard(void)
+{
+    return mode != MODE_DESKTOP || overlay_is_open() || menu_is_open() || spotlight_is_open() || launchpad_is_open();
+}
 
 /* ---- input routing ---------------------------------------------------------------------- */
 
@@ -552,6 +583,7 @@ static void handle_key(const input_event_t *ev)
 
 extern const uint8_t wallpaper_jpg[], wallpaper_jpg_end[];
 extern const uint8_t kepler_icon_jpg[], kepler_icon_jpg_end[];
+extern const uint32_t finder_icon_argb[];
 
 static void boot_work(void (*progress)(int pct))
 {
@@ -564,7 +596,9 @@ static void boot_work(void (*progress)(int pct))
     progress(25);
     image_t *wall = image_cover(src, g_screen.w, g_screen.h);
     progress(55);
-    image_sharpen(wall, 90);
+    /* only a picture that had to shrink a lot needs crisping up; at full size it is left alone */
+    if (src->w > g_screen.w * 5 / 4 && src->h > g_screen.h * 5 / 4)
+        image_sharpen(wall, 40);
     progress(65);
     image_free(src);
     icons_set_user_picture(wall);
@@ -573,26 +607,72 @@ static void boot_work(void (*progress)(int pct))
     image_t *kepler;
     if (jpeg_decode(kepler_icon_jpg, kepler_icon_jpg_end - kepler_icon_jpg, &kepler))
         icons_set_image(ICON_BROWSER, kepler);
+    static image_t finder = { (uint32_t *)finder_icon_argb, 256, 256 };
+    icons_set_image_plain(ICON_FINDER, &finder);
     icons_prerender(NULL);
     progress(100);
 }
 
+static void tick_all(void)
+{
+    if (mode == MODE_DESKTOP) {
+        topbar_tick();
+        dock_tick();
+        spotlight_tick();
+        overlay_tick();
+    } else if (mode == MODE_LOGIN) {
+        screens_login_tick();
+        overlay_tick();
+    }
+    wm_tick();
+    beep_update();
+}
+
+static void start_session(void)
+{
+    mx = g_screen.w / 2;
+    my = g_screen.h / 2;
+    screens_boot(boot_work);
+    g_sys.boot_ms = timer_ms();
+    kprintf("shell: boot finished in %u ms\n", g_sys.boot_ms);
+    mode = MODE_LOGIN;
+    screens_login_reset(false);
+    ui_invalidate_all();
+    kprintf("login: shown\n");
+}
+
+#ifdef KEPLER_HOSTED
+void shell_main(void)
+{
+    kprintf("video: %dx%d, %s\n", g_screen.w, g_screen.h, g_sys.video);
+    start_session();
+    uint32_t last_tick = 0;
+    for (;;) {
+        host_pump();
+        input_event_t ev;
+        while (input_poll(&ev)) {
+            if (ev.type == EV_MOUSE)
+                handle_mouse(&ev);
+            else if (ev.type == EV_KEY)
+                handle_key(&ev);
+        }
+        uint32_t now = timer_ms();
+        if (now - last_tick >= 15) {
+            last_tick = now;
+            tick_all();
+        }
+        compose();
+        host_sync();
+        host_wait(15 - (int)MIN(15u, timer_ms() - last_tick));
+    }
+}
+#else
 void desktop_main(multiboot_info_t *mbi)
 {
     if (!video_init(mbi))
         panic("no usable linear framebuffer");
     kprintf("video: %dx%d, %s\n", g_screen.w, g_screen.h, g_sys.video);
-    mx = g_screen.w / 2;
-    my = g_screen.h / 2;
-
-    screens_boot(boot_work);
-    g_sys.boot_ms = timer_ms();
-    kprintf("shell: boot finished in %u ms\n", g_sys.boot_ms);
-
-    mode = MODE_LOGIN;
-    screens_login_reset(false);
-    ui_invalidate_all();
-    kprintf("login: shown\n");
+    start_session();
 
     uint32_t last_tick = 0;
     for (;;) {
@@ -607,17 +687,7 @@ void desktop_main(multiboot_info_t *mbi)
         uint32_t now = timer_ms();
         if (now - last_tick >= 15) {
             last_tick = now;
-            if (mode == MODE_DESKTOP) {
-                topbar_tick();
-                dock_tick();
-                spotlight_tick();
-                overlay_tick();
-            } else if (mode == MODE_LOGIN) {
-                screens_login_tick();
-                overlay_tick();
-            }
-            wm_tick();
-            beep_update();
+            tick_all();
         }
         compose();
 
@@ -631,14 +701,17 @@ void desktop_main(multiboot_info_t *mbi)
         }
     }
 }
+#endif
 
 void gui_panic(const char *msg)
 {
     if (!g_screen.back) {
+#ifndef KEPLER_HOSTED
         vga_text_init();
         vga_text_color(0x4F);
         vga_text_write("KeplerOS has stopped.\n\n");
         vga_text_write(msg);
+#endif
         return;
     }
     gfx_t g = video_gfx();
