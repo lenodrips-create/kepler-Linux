@@ -1,71 +1,63 @@
-/* About KeplerOS and System Properties. */
+/* About This Kepler and System Information. */
 
 #include "apps.h"
 
-static void commas(uint32_t v, char *out, int n)
+/* "KeplerOS" in the light display face, version underneath */
+static int product_name(gfx_t *g, int x, int y)
 {
-    char tmp[16];
-    ksnprintf(tmp, sizeof tmp, "%u", v);
-    int len = strlen(tmp), o = 0;
-    for (int i = 0; i < len && o < n - 1; i++) {
-        out[o++] = tmp[i];
-        if ((len - i - 1) % 3 == 0 && i != len - 1 && o < n - 1)
-            out[o++] = ',';
-    }
-    out[o] = 0;
+    int nx = gfx_text(g, &font_display, x, y, "KeplerOS", COL_TEXT);
+    gfx_text(g, &font_display, nx + 8, y, "Big Sur", HEX(0x6E6E73));
+    gfx_text(g, &font_ui, x + 1, y + font_display.height + 2, "Version " KEPLER_VERSION " (" KEPLER_BUILD ")", HEX(0x6E6E73));
+    return y + font_display.height + 2 + font_ui.height;
 }
 
-static void paint_logo_banner(gfx_t *g, int w, int h)
-{
-    gfx_vgrad(g, 0, 0, w, h, HEX(0xFFFFFF), HEX(0xE6EEFC));
-    gfx_blit_alpha(g, 22, (h - 64) / 2, icon_get(ICON_KEPLER, 64), 255);
-    int x = 100, y = (h - font_logo_small.height) / 2 - 6;
-    x = gfx_text(g, &font_logo_small, x, y, "Kepler", HEX(0x1D4FB8));
-    gfx_text(g, &font_logo_small, x + 2, y, "OS", HEX(0xF08C12));
-    gfx_text(g, &font_ui, 102, y + font_logo_small.height, "a small operating system written in C", HEX(0x5A6B85));
-    gfx_hgrad(g, 0, h - 4, w / 2, 4, HEX(0x2F64DA), HEX(0x5BB0F5));
-    gfx_hgrad(g, w / 2, h - 4, w - w / 2, 4, HEX(0x5BB0F5), HEX(0x6CC04A));
-}
-
-/* ---- About ------------------------------------------------------------------------------------------- */
+/* ---- About This Kepler -------------------------------------------------------------------------------- */
 
 typedef struct {
-    button_t items[1];
+    button_t items[2];
     buttons_t btns;
 } about_t;
+
+static void spec(gfx_t *g, int x, int y, const char *label, const char *value)
+{
+    int lx = gfx_text(g, &font_ui_bold, x, y, label, COL_TEXT);
+    gfx_text(g, &font_ui, lx + 8, y, value, COL_TEXT);
+}
 
 static void about_paint(window_t *w, gfx_t *g, int cw, int ch)
 {
     about_t *a = w->data;
-    paint_logo_banner(g, cw, 92);
-    int x = 22, y = 108;
-    gfx_text(g, &font_ui, x, y, "KeplerOS", HEX(0x000000));
-    y += 15;
-    gfx_text(g, &font_ui, x, y, "Version " KEPLER_VERSION " (Build " KEPLER_BUILD ")", HEX(0x000000));
-    y += 15;
-    gfx_text(g, &font_ui, x, y, "Copyright (C) 2026 The KeplerOS Project", HEX(0x000000));
-    y += 26;
-    gfx_text(g, &font_ui, x, y, "Created by Lennon Helman with the help of Claude Code.", HEX(0x000000));
-    y += 26;
-    gfx_text(g, &font_ui, x, y, "This product is licensed to:", HEX(0x000000));
-    y += 17;
-    gfx_text(g, &font_ui_bold, x + 30, y, g_user_name, HEX(0x000000));
-    y += 26;
-    gfx_hline(g, x, y, cw - 2 * x, HEX(0xACA899));
-    gfx_hline(g, x, y + 1, cw - 2 * x, HEX(0xFFFFFF));
-    y += 12;
-    char mem[32], line[96];
-    commas(g_sys.mem_kb, mem, sizeof mem);
-    ksnprintf(line, sizeof line, "Physical memory available to KeplerOS:  %s KB", mem);
-    gfx_text(g, &font_ui, x, y, line, HEX(0x000000));
+    /* the planet on a soft halo, on the left */
+    gfx_circle(g, 120, 120, 92, RGBA(10, 100, 222, 22));
+    gfx_blit_alpha(g, 56, 56, icon_get(ICON_KEPLER, 128), 255);
+    int x = 250, y = 40;
+    y = product_name(g, x, y) + 18;
+    char line[96];
+    spec(g, x, y, "Computer", "KeplerPC (QEMU, 2026)");
+    y += 20;
+    ksnprintf(line, sizeof line, "%s, ~%u MHz", g_sys.cpu_brand, g_sys.cpu_mhz);
+    spec(g, x, y, "Processor", line);
+    y += 20;
+    ksnprintf(line, sizeof line, "%u MB", g_sys.mem_kb / 1024);
+    spec(g, x, y, "Memory", line);
+    y += 20;
+    ksnprintf(line, sizeof line, "%dx%d, 32-bit colour", g_sys.screen_w, g_sys.screen_h);
+    spec(g, x, y, "Graphics", line);
+    y += 20;
+    spec(g, x, y, "Signed in as", g_user_name);
     buttons_paint(&a->btns, g);
+    gfx_text_centered(g, &font_ui, 0, ch - 24, cw, "Made by Lennon Helman with the help of Claude Code.  (C) 2026 The KeplerOS Project",
+                      HEX(0x9A9A9E));
 }
 
 static void about_mouse(window_t *w, int kind, int x, int y, int button)
 {
     about_t *a = w->data;
-    if (buttons_mouse(&a->btns, w, kind, x, y) == 1)
-        wm_close(w);
+    int id = buttons_mouse(&a->btns, w, kind, x, y);
+    if (id == 1)
+        ui_launch("sysprops");
+    else if (id == 2)
+        ui_launch("taskmgr");
 }
 
 static void about_key(window_t *w, const input_event_t *ev)
@@ -86,10 +78,12 @@ window_t *about_open(void)
         return w;
     }
     about_t *a = kzalloc(sizeof *a);
-    int cw = 430, ch = 306;
-    a->items[0] = (button_t){ cw - 97, ch - 37, 75, 23, "OK", 1, BTN_DEFAULT };
-    a->btns = (buttons_t){ a->items, 1, -1, -1 };
-    w = wm_create("About KeplerOS", ICON_KEPLER, cw, ch, &about_ops, a, WF_DIALOG);
+    int cw = 600, ch = 300;
+    a->items[0] = (button_t){ 250, 228, 130, 24, "System Report...", 1, 0 };
+    a->items[1] = (button_t){ 390, 228, 140, 24, "Activity Monitor...", 2, 0 };
+    a->btns = (buttons_t){ a->items, 2, -1, -1 };
+    w = wm_create("", ICON_KEPLER, cw, ch, &about_ops, a, WF_DIALOG);
+    wm_set_app(w, "System Information", NULL, NULL, NULL);
     wm_center(w);
     return w;
 }
@@ -106,10 +100,7 @@ typedef struct {
 
 static void sp_general(gfx_t *g, int x, int y, int w)
 {
-    gfx_blit_alpha(g, x + 30, y + 26, icon_get(ICON_KEPLER, 64), 255);
-    int lx = x + 26, ly = y + 100;
-    int tx = gfx_text(g, &font_logo_small, lx, ly, "Kepler", HEX(0x1D4FB8));
-    gfx_text(g, &font_logo_small, tx + 2, ly, "OS", HEX(0xF08C12));
+    gfx_blit_alpha(g, x + 34, y + 30, icon_get(ICON_KEPLER, 96), 255);
 
     int cx = x + 196, cy = y + 24;
     char line[96];
@@ -201,9 +192,7 @@ static void sp_paint(window_t *w, gfx_t *g, int cw, int ch)
 {
     sysprops_t *s = w->data;
     int px = 8, py = 8, pw = cw - 16, ph = ch - 56;
-    draw_tabs(g, px, py, pw, sp_tabs, ARRAY_LEN(sp_tabs), s->tab);
-    gfx_fill(g, px, py + 22, pw, ph - 22, HEX(0xFCFCFE));
-    gfx_rect(g, px, py + 21, pw, ph - 21, HEX(0x919B9C));
+    draw_tab_panel(g, px, py + TABS_H / 2, pw, ph - TABS_H / 2);
     draw_tabs(g, px, py, pw, sp_tabs, ARRAY_LEN(sp_tabs), s->tab);
     gfx_t pg = gfx_sub(g, px + 1, py + 22, pw - 2, ph - 23);
     switch (s->tab) {
@@ -219,7 +208,7 @@ static void sp_mouse(window_t *w, int kind, int x, int y, int button)
 {
     sysprops_t *s = w->data;
     if (kind == MS_DOWN) {
-        int t = tabs_hit(8, 8, sp_tabs, ARRAY_LEN(sp_tabs), x, y);
+        int t = tabs_hit(8, 8, wm_client_rect(w).w - 16, sp_tabs, ARRAY_LEN(sp_tabs), x, y);
         if (t >= 0) {
             s->tab = t;
             wm_invalidate_client(w);
@@ -259,6 +248,7 @@ window_t *sysprops_open(void)
     s->items[1] = (button_t){ cw - 170, ch - 35, 75, 23, "Cancel", 2, 0 };
     s->items[2] = (button_t){ cw - 88, ch - 35, 75, 23, "Apply", 3, BTN_DISABLED };
     s->btns = (buttons_t){ s->items, 3, -1, -1 };
-    w = wm_create("System Properties", ICON_SYSINFO, cw, ch, &sp_ops, s, WF_DIALOG);
+    w = wm_create("System Information", ICON_SYSINFO, cw, ch, &sp_ops, s, WF_DIALOG);
+    wm_set_app(w, "System Information", NULL, NULL, NULL);
     return w;
 }

@@ -229,8 +229,7 @@ static void tm_paint(window_t *w, gfx_t *g, int cw, int ch)
     tm_t *t = w->data;
     menubar_paint(&t->mb, g, cw);
     int px = page_x(), py = page_y() - 22, pw = cw - 14, ph = ch - py - 26;
-    gfx_fill(g, px, py + 22, pw, ph - 22, HEX(0xFCFCFE));
-    gfx_rect(g, px, py + 21, pw, ph - 21, HEX(0x919B9C));
+    draw_tab_panel(g, px, py + TABS_H / 2, pw, ph - TABS_H / 2);
     draw_tabs(g, px, py, pw, tm_tabs, 3, t->tab);
     int ix = px + 10, iy = py + 34, iw = pw - 20, ih = ph - 34 - 10;
     switch (t->tab) {
@@ -315,7 +314,7 @@ static void tm_mouse(window_t *w, int kind, int x, int y, int button)
     if (menubar_mouse(&t->mb, w, kind, x, y, command, w))
         return;
     if (kind == MS_DOWN) {
-        int tab = tabs_hit(page_x(), page_y() - 22, tm_tabs, 3, x, y);
+        int tab = tabs_hit(page_x(), page_y() - 22, wm_client_rect(w).w - 14, tm_tabs, 3, x, y);
         if (tab >= 0) {
             t->tab = tab;
             t->sel = -1;
@@ -373,7 +372,8 @@ window_t *taskmgr_open(int tab)
     t->mb.entries = bar;
     t->mb.n = ARRAY_LEN(bar);
     t->mb.open = t->mb.hover = -1;
-    w = wm_create("KeplerOS Task Manager", ICON_TASKMGR, 420, 500, &tm_ops, t, WF_NO_MAX);
+    w = wm_create("Activity Monitor", ICON_TASKMGR, 420, 500, &tm_ops, t, WF_NO_MAX);
+    wm_set_app(w, "Activity Monitor", &t->mb, command, w);
     set_buttons(w);
     sample(t);
     wm_set_tick(w, 500);

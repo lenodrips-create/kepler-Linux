@@ -1,4 +1,4 @@
-/* Window manager: Luna-style frames, z-order, focus, move/resize, minimise/maximise. */
+/* Window manager: Big Sur-style frames, z-order, focus, move/resize, minimise to the dock, zoom. */
 
 #include "ui.h"
 
@@ -7,8 +7,14 @@ static window_t *active;
 static int next_id = 1;
 static int cascade;
 
-enum { HT_NONE, HT_CLIENT, HT_CAPTION, HT_CLOSE, HT_MAX, HT_MIN, HT_L, HT_R, HT_T, HT_B, HT_TL, HT_TR, HT_BL, HT_BR, HT_FRAME };
+enum { HT_NONE, HT_CLIENT, HT_CAPTION, HT_CLOSE, HT_MAX, HT_MIN, HT_L, HT_R, HT_T, HT_B, HT_TL, HT_TR, HT_BL, HT_BR };
 enum { DRAG_NONE, DRAG_MOVE, DRAG_RESIZE, DRAG_BUTTON, DRAG_CLIENT };
+
+/* the active window's shadow; inactive ones get a tighter, lighter one */
+#define SH_BLUR  22
+#define SH_DY    10
+#define GRIP_OUT 5 /* resize grips reach this far outside the frame... */
+#define GRIP_IN  3 /* ...and this far in */
 
 static struct {
     int mode;
@@ -20,7 +26,7 @@ static struct {
 } drag;
 
 static window_t *hover_win;
-static window_t *hot_win; /* caption button hover */
+static window_t *hot_win; /* the mouse is over this window's traffic lights */
 static int hot_hit;
 
 /* ---- list helpers ---------------------------------------------------------------- */
@@ -45,6 +51,12 @@ static void push_top(window_t *w)
 }
 
 static rect_t frame_rect(const window_t *w) { return rect_make(w->x, w->y, w->w, w->h); }
+
+/* everything a window paints, shadow included */
+static rect_t outer_rect(const window_t *w)
+{
+    return rect_make(w->x - SH_BLUR, w->y - SH_BLUR + SH_DY, w->w + 2 * SH_BLUR, w->h + 2 * SH_BLUR);
+}
 
 static bool visible(const window_t *w) { return !w->dead && !(w->flags & WF_MINIMIZED); }
 
@@ -77,13 +89,19 @@ window_t *wm_find(const window_ops_t *ops)
 
 window_t *wm_active(void) { return active; }
 
+static void invalidate_outer(window_t *w)
+{
+    if (w && visible(w))
+        ui_invalidate(outer_rect(w));
+}
+
 void wm_deactivate(void)
 {
     window_t *old = active;
     active = NULL;
     if (old) {
-        ui_invalidate(rect_make(old->x, old->y, old->w, TITLE_H));
-        taskbar_changed();
+        invalidate_outer(old);
+        shell_windows_changed();
     }
 }
 
@@ -96,45 +114,81 @@ static window_t *topmost_visible(void)
     return top;
 }
 
-static window_t *window_at(int x, int y)
+/* ---- apps --------------------------------------------------------------------------- */
+
+void wm_set_app(window_t *w, const char *app, struct menubar *menus, void (*fn)(int id, void *ctx), void *ctx)
 {
-    window_t *hit = NULL;
+    strlcpy(w->app, app, sizeof w->app);
+    w->menus = menus;
+    w->menu_fn = fn;
+    w->menu_ctx = ctx;
+    shell_windows_changed();
+}
+
+window_t *wm_menu_owner(void)
+{
+    window_t *w = active;
+    while (w && !w->menus && w->owner && wm_alive(w->owner))
+        w = w->owner;
+    return w && !w->dead ? w : NULL;
+}
+
+window_t *wm_app_window(const char *app)
+{
+    window_t *shown = NULL, *any = NULL;
+    for (window_t *w = bottom; w; w = w->next) {
+        if (w->dead || strcmp(w->app, app))
+            continue;
+        any = w;
+        if (visible(w))
+            shown = w;
+    }
+    return shown ? shown : any;
+}
+
+void wm_hide_app(const char *app)
+{
     for (window_t *w = bottom; w; w = w->next)
-        if (visible(w) && rect_contains(frame_rect(w), x, y))
-            hit = w;
-    return hit;
+        if (!w->dead && !strcmp(w->app, app))
+            wm_minimize(w);
 }
 
 /* ---- geometry ------------------------------------------------------------------- */
 
+static int caption_h(const window_t *w) { return (w->flags & WF_UNIFIED) ? w->caption_h : TITLE_H; }
+
 rect_t wm_client_rect(const window_t *w)
 {
-    return rect_make(w->x + FRAME, w->y + TITLE_H, w->w - 2 * FRAME, w->h - TITLE_H - FRAME);
+    if (w->flags & WF_UNIFIED)
+        return frame_rect(w);
+    return rect_make(w->x, w->y + TITLE_H, w->w, w->h - TITLE_H);
 }
 
-static int button_count(const window_t *w)
+/* traffic lights, left to right: 0 close, 1 minimise, 2 zoom (local coordinates) */
+static rect_t light_rect(const window_t *w, int i)
 {
+    int cy = MIN(caption_h(w), 52) / 2;
+    return rect_make(13 + i * 20, cy - 7, 14, 14);
+}
+
+static bool light_enabled(const window_t *w, int i)
+{
+    if (i == 0)
+        return true;
     if (w->flags & WF_DIALOG)
-        return 1;
-    return 3;
-}
-
-/* caption buttons from the right: 0 close, 1 maximise, 2 minimise (local coordinates) */
-static rect_t caption_button(const window_t *w, int slot)
-{
-    int top = (w->flags & WF_MAXIMIZED) ? 4 + 2 : 5;
-    return rect_make(w->w - 5 - 21 - slot * 23, top, 21, 21);
+        return false;
+    return i == 1 || !(w->flags & WF_NO_MAX);
 }
 
 static int hit_test(window_t *w, int x, int y)
 {
     int lx = x - w->x, ly = y - w->y;
-    if (lx < 0 || ly < 0 || lx >= w->w || ly >= w->h)
-        return HT_NONE;
     bool sizing = (w->flags & WF_RESIZABLE) && !(w->flags & WF_MAXIMIZED);
     if (sizing) {
-        const int c = 14;
-        bool left = lx < FRAME, right = lx >= w->w - FRAME, top = ly < FRAME, bot = ly >= w->h - FRAME;
+        if (lx < -GRIP_OUT || ly < -GRIP_OUT || lx >= w->w + GRIP_OUT || ly >= w->h + GRIP_OUT)
+            return HT_NONE;
+        const int c = 12;
+        bool left = lx < GRIP_IN, right = lx >= w->w - GRIP_IN, top = ly < GRIP_IN, bot = ly >= w->h - GRIP_IN;
         if ((top && lx < c) || (left && ly < c))
             return HT_TL;
         if ((top && lx >= w->w - c) || (right && ly < c))
@@ -151,19 +205,27 @@ static int hit_test(window_t *w, int x, int y)
             return HT_T;
         if (bot)
             return HT_B;
+    } else if (lx < 0 || ly < 0 || lx >= w->w || ly >= w->h) {
+        return HT_NONE;
     }
-    if (ly < TITLE_H) {
-        for (int i = 0; i < button_count(w); i++)
-            if (rect_contains(caption_button(w, i), lx, ly)) {
-                if (i == 1 && (w->flags & WF_NO_MAX))
-                    return HT_CAPTION;
-                return i == 0 ? HT_CLOSE : i == 1 ? HT_MAX : HT_MIN;
-            }
+    if (ly < caption_h(w)) {
+        for (int i = 0; i < 3 && !(w->flags & WF_ALERT); i++)
+            if (rect_contains(light_rect(w, i), lx, ly) && light_enabled(w, i))
+                return i == 0 ? HT_CLOSE : i == 1 ? HT_MIN : HT_MAX;
+        if ((w->flags & WF_UNIFIED) && w->ops->caption_hit && w->ops->caption_hit(w, lx, ly))
+            return HT_CLIENT;
         return HT_CAPTION;
     }
-    if (rect_contains(wm_client_rect(w), x, y))
-        return HT_CLIENT;
-    return HT_FRAME;
+    return HT_CLIENT;
+}
+
+static window_t *window_at(int x, int y)
+{
+    window_t *hit = NULL;
+    for (window_t *w = bottom; w; w = w->next)
+        if (visible(w) && hit_test(w, x, y) != HT_NONE)
+            hit = w;
+    return hit;
 }
 
 /* ---- invalidation ------------------------------------------------------------------ */
@@ -188,10 +250,10 @@ void wm_invalidate_client_rect(window_t *w, int x, int y, int cw, int ch)
     ui_invalidate(rect_intersect(c, rect_make(c.x + x, c.y + y, cw, ch)));
 }
 
-static void invalidate_caption(window_t *w)
+static void invalidate_lights(window_t *w)
 {
     if (w && visible(w))
-        ui_invalidate(rect_make(w->x, w->y, w->w, TITLE_H));
+        ui_invalidate(rect_make(w->x, w->y, 80, caption_h(w)));
 }
 
 /* ---- lifecycle --------------------------------------------------------------------- */
@@ -201,55 +263,60 @@ window_t *wm_create(const char *title, int icon, int cw, int ch, const window_op
     window_t *w = kzalloc(sizeof *w);
     w->id = next_id++;
     strlcpy(w->title, title, sizeof w->title);
+    strlcpy(w->app, title, sizeof w->app);
     w->icon = icon;
-    w->flags = flags;
     w->ops = ops;
     w->data = data;
     w->bg = COL_FACE;
-    w->w = cw + 2 * FRAME;
-    w->h = ch + TITLE_H + FRAME;
+    w->w = cw;
+    if (flags & WF_ALERT)
+        flags |= WF_UNIFIED;
+    w->flags = flags;
+    w->h = ch + ((flags & WF_UNIFIED) ? 0 : TITLE_H);
+    w->caption_h = (flags & WF_ALERT) ? ch : TITLE_H;
     w->min_w = 200;
     w->min_h = 120;
     w->cursor = CURSOR_ARROW;
     w->created = timer_ms();
 
-    int sw = g_screen.w, sh = g_screen.h - TASKBAR_H;
-    w->x = 110 + (cascade % 8) * 30;
-    w->y = 50 + (cascade % 8) * 30;
+    rect_t a = ui_work_area();
+    w->x = a.x + 130 + (cascade % 8) * 26;
+    w->y = a.y + 28 + (cascade % 8) * 26;
     cascade++;
-    if (w->x + w->w > sw)
-        w->x = MAX(0, sw - w->w);
-    if (w->y + w->h > sh)
-        w->y = MAX(0, sh - w->h);
+    if (w->x + w->w > a.x + a.w)
+        w->x = MAX(a.x, a.x + a.w - w->w);
+    if (w->y + w->h > a.y + a.h)
+        w->y = MAX(a.y, a.y + a.h - w->h);
 
     push_top(w);
     wm_focus(w);
-    taskbar_changed();
+    shell_windows_changed();
     return w;
 }
 
 void wm_center(window_t *w)
 {
-    ui_invalidate(frame_rect(w));
-    w->x = (g_screen.w - w->w) / 2;
-    w->y = MAX(0, (g_screen.h - TASKBAR_H - w->h) / 2);
-    ui_invalidate(frame_rect(w));
+    rect_t a = ui_work_area();
+    invalidate_outer(w);
+    w->x = a.x + (a.w - w->w) / 2;
+    w->y = MAX(a.y, a.y + (a.h - w->h) / 2 - 20);
+    invalidate_outer(w);
 }
 
 void wm_move(window_t *w, int x, int y)
 {
-    ui_invalidate(frame_rect(w));
+    invalidate_outer(w);
     w->x = x;
     w->y = y;
-    ui_invalidate(frame_rect(w));
+    invalidate_outer(w);
 }
 
 void wm_set_client_size(window_t *w, int cw, int ch)
 {
-    ui_invalidate(frame_rect(w));
-    w->w = cw + 2 * FRAME;
-    w->h = ch + TITLE_H + FRAME;
-    ui_invalidate(frame_rect(w));
+    invalidate_outer(w);
+    w->w = cw;
+    w->h = ch + ((w->flags & WF_UNIFIED) ? 0 : TITLE_H);
+    invalidate_outer(w);
     if (w->ops->resized)
         w->ops->resized(w);
 }
@@ -257,8 +324,9 @@ void wm_set_client_size(window_t *w, int cw, int ch)
 void wm_set_title(window_t *w, const char *title)
 {
     strlcpy(w->title, title, sizeof w->title);
-    invalidate_caption(w);
-    taskbar_changed();
+    if (visible(w))
+        ui_invalidate(rect_make(w->x, w->y, w->w, caption_h(w)));
+    shell_windows_changed();
 }
 
 void wm_set_tick(window_t *w, uint32_t ms)
@@ -273,6 +341,7 @@ void wm_set_modal(window_t *owner, window_t *dialog)
         return;
     owner->modal = dialog;
     dialog->owner = owner;
+    strlcpy(dialog->app, owner->app, sizeof dialog->app);
 }
 
 void wm_focus(window_t *w)
@@ -283,22 +352,23 @@ void wm_focus(window_t *w)
         w = w->modal;
     if (w->flags & WF_MINIMIZED) {
         w->flags &= ~WF_MINIMIZED;
-        ui_invalidate(frame_rect(w));
+        image_free(w->thumb);
+        w->thumb = NULL;
     }
     window_t *old = active;
     /* raise the owner first so its dialog stays above it */
     if (w->owner && wm_alive(w->owner) && !(w->owner->flags & WF_MINIMIZED)) {
         unlink(w->owner);
         push_top(w->owner);
-        ui_invalidate(frame_rect(w->owner));
+        invalidate_outer(w->owner);
     }
     unlink(w);
     push_top(w);
     active = w;
-    ui_invalidate(frame_rect(w));
+    invalidate_outer(w);
     if (old && old != w)
-        invalidate_caption(old);
-    taskbar_changed();
+        invalidate_outer(old);
+    shell_windows_changed();
 }
 
 void wm_close(window_t *w)
@@ -307,12 +377,14 @@ void wm_close(window_t *w)
         return;
     if (w->modal && wm_alive(w->modal))
         wm_close(w->modal);
+    invalidate_outer(w);
     w->dead = true;
     if (w->ops->close)
         w->ops->close(w);
     if (w->owner && w->owner->modal == w)
         w->owner->modal = NULL;
-    ui_invalidate(frame_rect(w));
+    image_free(w->thumb);
+    w->thumb = NULL;
     if (drag.w == w)
         drag.mode = DRAG_NONE;
     if (hover_win == w)
@@ -325,7 +397,7 @@ void wm_close(window_t *w)
         if (next)
             wm_focus(next);
     }
-    taskbar_changed();
+    shell_windows_changed();
 }
 
 /* free closed windows once nobody is in the middle of handling them */
@@ -343,19 +415,167 @@ static void reap(void)
     }
 }
 
+/* ---- painting ------------------------------------------------------------------------ */
+
+#define CR WIN_RADIUS
+
+/* What sits under a window's four rounded corners is saved before the window
+ * paints and blended back afterwards, so apps can fill their client area
+ * edge to edge and still get round corners. */
+typedef uint32_t corners_t[4][CR * CR];
+
+static void corners_save(gfx_t *g, int W, int H, corners_t s)
+{
+    for (int k = 0; k < 4; k++) {
+        int cx = (k & 1) ? W - CR : 0, cy = (k & 2) ? H - CR : 0;
+        for (int j = 0; j < CR; j++)
+            for (int i = 0; i < CR; i++) {
+                int ax = g->ox + cx + i, ay = g->oy + cy + j;
+                if (rect_contains(g->clip, ax, ay))
+                    s[k][j * CR + i] = g->px[ay * g->stride + ax];
+            }
+    }
+}
+
+static void corners_restore(gfx_t *g, int W, int H, corners_t s)
+{
+    for (int k = 0; k < 4; k++) {
+        int cx = (k & 1) ? W - CR : 0, cy = (k & 2) ? H - CR : 0;
+        for (int j = 0; j < CR; j++)
+            for (int i = 0; i < CR; i++) {
+                int ax = g->ox + cx + i, ay = g->oy + cy + j;
+                if (!rect_contains(g->clip, ax, ay))
+                    continue;
+                int cov = gfx_round_coverage(cx + i, cy + j, W, H, CR, CORNER_ALL);
+                if (cov < 255) {
+                    uint32_t *p = &g->px[ay * g->stride + ax];
+                    *p = color_lerp(s[k][j * CR + i], *p, cov * 256 / 255);
+                }
+            }
+    }
+}
+
+static void paint_titlebar(gfx_t *g, window_t *w, bool act)
+{
+    int W = w->w;
+    if (act)
+        gfx_vgrad(g, 0, 0, W, TITLE_H, HEX(0xEDEDED), HEX(0xE2E2E2));
+    else
+        gfx_fill(g, 0, 0, W, TITLE_H, HEX(0xF6F6F6));
+    gfx_hline(g, 0, TITLE_H - 1, W, act ? HEX(0xD1D1D1) : HEX(0xE2E2E2));
+    /* centred on the window, but never under the traffic lights */
+    int tw = text_width(&font_title, w->title);
+    int tx = MAX(70, (W - tw) / 2);
+    int ty = (TITLE_H - font_title.height) / 2;
+    gfx_text_clipped(g, &font_title, tx, ty, W - 12 - tx, w->title, act ? HEX(0x404040) : HEX(0xB2B2B2));
+}
+
+static void paint_lights(gfx_t *g, window_t *w, bool act)
+{
+    static const uint32_t fills[3] = { 0xFF5F57, 0xFEBC2E, 0x28C840 };
+    static const uint32_t edges[3] = { 0xE0443E, 0xDEA123, 0x1AAB29 };
+    static const uint32_t marks[3] = { 0x4D0000, 0x985712, 0x0A5F14 };
+    static const int glyphs[3] = { GLYPH_TL_CLOSE, GLYPH_TL_MIN, GLYPH_TL_ZOOM };
+    static const int hts[3] = { HT_CLOSE, HT_MIN, HT_MAX };
+    bool hot = hot_win == w;
+    for (int i = 0; i < 3; i++) {
+        rect_t r = light_rect(w, i);
+        int cx = r.x + 7, cy = r.y + 7;
+        bool en = light_enabled(w, i);
+        uint32_t fill = HEX(fills[i]), edge = HEX(edges[i]);
+        if (!en) {
+            fill = HEX(0xE3E3E3);
+            edge = HEX(0xD0D0D0);
+        } else if (!act && !hot) {
+            fill = HEX(0xDDDDDD);
+            edge = HEX(0xC8C8C8);
+        }
+        bool pressed = en && drag.mode == DRAG_BUTTON && drag.w == w && drag.hit == hts[i] && drag.inside;
+        if (pressed) {
+            fill = color_shade(fill, 78);
+            edge = color_shade(edge, 78);
+        }
+        gfx_circle(g, cx, cy, 6, edge);
+        gfx_circle(g, cx, cy, 5, fill);
+        if (hot && en)
+            gfx_blit_tint(g, cx - 6, cy - 6, icon_get(glyphs[i], 12), WITH_ALPHA(HEX(marks[i]), 210));
+    }
+}
+
+static void paint_window(gfx_t *g, window_t *w, bool act, bool shadow)
+{
+    if (shadow) {
+        if (act)
+            gfx_shadow(g, w->x, w->y, w->w, w->h, CR, SH_BLUR, SH_DY, 78);
+        else
+            gfx_shadow(g, w->x, w->y, w->w, w->h, CR, 12, 4, 46);
+    }
+    gfx_t wg = gfx_sub(g, w->x, w->y, w->w, w->h);
+    corners_t saved;
+    corners_save(&wg, w->w, w->h, saved);
+    if (!(w->flags & WF_UNIFIED))
+        paint_titlebar(&wg, w, act);
+    rect_t c = wm_client_rect(w);
+    gfx_t cg = gfx_sub(g, c.x, c.y, c.w, c.h);
+    gfx_fill(&cg, 0, 0, c.w, c.h, w->bg);
+    if (w->ops->paint)
+        w->ops->paint(w, &cg, c.w, c.h);
+    if (!(w->flags & WF_ALERT))
+        paint_lights(&wg, w, act);
+    corners_restore(&wg, w->w, w->h, saved);
+    gfx_round_frame(&wg, 0, 0, w->w, w->h, CR, RGBA(0, 0, 0, act ? 64 : 44), CORNER_ALL);
+    gfx_hline(&wg, CR, 1, w->w - 2 * CR, RGBA(255, 255, 255, 150));
+}
+
+void wm_paint(gfx_t *g, rect_t dirty)
+{
+    for (window_t *w = bottom; w; w = w->next) {
+        if (!visible(w) || rect_empty(rect_intersect(outer_rect(w), dirty)))
+            continue;
+        paint_window(g, w, w == active, true);
+    }
+}
+
+/* the picture the dock shows while a window is minimised */
+static void snapshot(window_t *w)
+{
+    image_free(w->thumb);
+    w->thumb = NULL;
+    int W = w->w, H = w->h;
+    if (W < 16 || H < 16)
+        return;
+    image_t full = { kzalloc((size_t)W * H * 4), W, H };
+    gfx_t g = gfx_for_buffer(full.px, W, H, W);
+    int ox = w->x, oy = w->y;
+    w->x = w->y = 0;
+    paint_window(&g, w, true, false);
+    w->x = ox;
+    w->y = oy;
+    int tw = 44, th = 44;
+    if (W >= H)
+        th = MAX(8, 44 * H / W);
+    else
+        tw = MAX(8, 44 * W / H);
+    w->thumb = image_resize(&full, tw, th);
+    kfree(full.px);
+}
+
+/* ---- minimise, zoom, cycle ------------------------------------------------------------ */
+
 void wm_minimize(window_t *w)
 {
     if (!w || (w->flags & WF_MINIMIZED))
         return;
+    snapshot(w);
+    invalidate_outer(w);
     w->flags |= WF_MINIMIZED;
-    ui_invalidate(frame_rect(w));
     if (active == w) {
         active = NULL;
         window_t *next = topmost_visible();
         if (next)
             wm_focus(next);
     }
-    taskbar_changed();
+    shell_windows_changed();
 }
 
 void wm_minimize_all(void)
@@ -369,7 +589,7 @@ void wm_toggle_maximize(window_t *w)
 {
     if ((w->flags & (WF_DIALOG | WF_NO_MAX)))
         return;
-    ui_invalidate(frame_rect(w));
+    invalidate_outer(w);
     if (w->flags & WF_MAXIMIZED) {
         w->flags &= ~WF_MAXIMIZED;
         w->x = w->restore.x;
@@ -379,12 +599,13 @@ void wm_toggle_maximize(window_t *w)
     } else {
         w->restore = frame_rect(w);
         w->flags |= WF_MAXIMIZED;
-        w->x = -FRAME;
-        w->y = -FRAME;
-        w->w = g_screen.w + 2 * FRAME;
-        w->h = g_screen.h - TASKBAR_H + 2 * FRAME;
+        rect_t a = ui_work_area();
+        w->x = a.x;
+        w->y = a.y;
+        w->w = a.w;
+        w->h = a.h;
     }
-    ui_invalidate(frame_rect(w));
+    invalidate_outer(w);
     if (w->ops->resized)
         w->ops->resized(w);
 }
@@ -405,129 +626,6 @@ void wm_cycle(void)
             wm_focus(w);
             return;
         }
-}
-
-/* ---- painting ------------------------------------------------------------------------ */
-
-static const uint32_t cap_active[] = { HEX(0x0A3FD6), HEX(0x3D93FF), HEX(0x2D82FA), HEX(0x0F63EE),
-                                       HEX(0x0256E6), HEX(0x004ED9), HEX(0x0042C2) };
-static const uint32_t cap_inactive[] = { HEX(0x7C95D6), HEX(0xABC6F6), HEX(0x9DB8EC), HEX(0x8BA8E6),
-                                         HEX(0x7E9CE1), HEX(0x7795DC), HEX(0x6D8BD2) };
-static const int cap_stops[] = { 0, 10, 28, 62, 150, 222, 255 };
-
-static const uint32_t frame_active[4] = { HEX(0x0831D9), HEX(0x166AEE), HEX(0x0B5BE3), HEX(0x0049D0) };
-static const uint32_t frame_inactive[4] = { HEX(0x6F8AD2), HEX(0xA9C1F2), HEX(0x8FA9E6), HEX(0x7C98DE) };
-
-static void paint_caption_button(gfx_t *g, window_t *w, int slot, bool act)
-{
-    rect_t r = caption_button(w, slot);
-    int ht = slot == 0 ? HT_CLOSE : slot == 1 ? HT_MAX : HT_MIN;
-    bool disabled = slot == 1 && (w->flags & WF_NO_MAX);
-    bool hot = hot_win == w && hot_hit == ht && !disabled;
-    bool pressed = drag.mode == DRAG_BUTTON && drag.w == w && drag.hit == ht && drag.inside;
-
-    uint32_t top, bot;
-    if (slot == 0) {
-        top = HEX(0xEB9A7E);
-        bot = HEX(0xCF3F18);
-        if (hot) {
-            top = HEX(0xF6B49B);
-            bot = HEX(0xE0552B);
-        }
-        if (pressed) {
-            top = HEX(0xB13414);
-            bot = HEX(0xD6603C);
-        }
-    } else {
-        top = HEX(0x6BA2FA);
-        bot = HEX(0x2462E2);
-        if (hot) {
-            top = HEX(0x8CBBFF);
-            bot = HEX(0x3E7CF0);
-        }
-        if (pressed) {
-            top = HEX(0x1E4FBF);
-            bot = HEX(0x3C76E6);
-        }
-    }
-    if (!act) {
-        top = color_lerp(top, HEX(0xD6E2FA), 120);
-        bot = color_lerp(bot, HEX(0xB8CBF2), 120);
-    }
-    gfx_round_rect(g, r.x, r.y, r.w, r.h, 3, act ? HEX(0xFFFFFF) : HEX(0xEEF2FC), CORNER_ALL);
-    gfx_round_rect_vgrad(g, r.x + 1, r.y + 1, r.w - 2, r.h - 2, 2, top, bot, CORNER_ALL);
-    /* soft inner highlight */
-    gfx_hline(g, r.x + 3, r.y + 2, r.w - 6, RGBA(255, 255, 255, 90));
-
-    uint32_t gc = disabled ? RGBA(255, 255, 255, 110) : HEX(0xFFFFFF);
-    int x = r.x, y = r.y;
-    if (slot == 0) {
-        for (int i = 0; i < 9; i++) {
-            gfx_fill(g, x + 6 + i, y + 6 + i, 2, 1, gc);
-            gfx_fill(g, x + 13 - i, y + 6 + i, 2, 1, gc);
-        }
-    } else if (slot == 1) {
-        if (w->flags & WF_MAXIMIZED) {
-            gfx_rect(g, x + 8, y + 5, 8, 8, gc);
-            gfx_hline(g, x + 8, y + 6, 8, gc);
-            gfx_fill(g, x + 5, y + 9, 8, 8, top);
-            gfx_rect(g, x + 5, y + 8, 8, 8, gc);
-            gfx_hline(g, x + 5, y + 9, 8, gc);
-        } else {
-            gfx_rect(g, x + 5, y + 5, 11, 11, gc);
-            gfx_fill(g, x + 5, y + 6, 11, 2, gc);
-        }
-    } else {
-        gfx_fill(g, x + 6, y + 13, 7, 3, gc);
-    }
-}
-
-static void paint_frame(gfx_t *g, window_t *w, bool act)
-{
-    int W = w->w, H = w->h;
-    const uint32_t *fr = act ? frame_active : frame_inactive;
-    gfx_round_rect_stops(g, 0, 0, W, TITLE_H, 8, act ? cap_active : cap_inactive, cap_stops, 7, CORNER_TOP);
-    /* darker side edges along the caption */
-    for (int i = 0; i < 2; i++) {
-        gfx_vline(g, i, 8, TITLE_H - 8, WITH_ALPHA(fr[0], i ? 70 : 160));
-        gfx_vline(g, W - 1 - i, 8, TITLE_H - 8, WITH_ALPHA(fr[0], i ? 70 : 160));
-    }
-    for (int i = 0; i < FRAME; i++) {
-        gfx_vline(g, i, TITLE_H, H - TITLE_H, fr[i]);
-        gfx_vline(g, W - 1 - i, TITLE_H, H - TITLE_H, fr[i]);
-        gfx_hline(g, i, H - 1 - i, W - 2 * i, fr[i]);
-    }
-
-    int bx = 6;
-    gfx_blit_alpha(g, bx, (TITLE_H - 16) / 2 + 1, icon_get(w->icon, 16), act ? 255 : 200);
-    int text_x = bx + 16 + 6;
-    int buttons_w = button_count(w) * 23 + 8;
-    int max_w = W - text_x - buttons_w;
-    int ty = (TITLE_H - font_title.height) / 2 + 1;
-    if (act)
-        gfx_text_clipped(g, &font_title, text_x + 1, ty + 1, max_w, w->title, HEX(0x0A1E7A));
-    gfx_text_clipped(g, &font_title, text_x, ty, max_w, w->title, act ? HEX(0xFFFFFF) : HEX(0xDCE6FA));
-
-    for (int i = 0; i < button_count(w); i++)
-        paint_caption_button(g, w, i, act);
-}
-
-void wm_paint(gfx_t *g, rect_t dirty)
-{
-    for (window_t *w = bottom; w; w = w->next) {
-        if (!visible(w))
-            continue;
-        rect_t fr = frame_rect(w);
-        if (rect_empty(rect_intersect(fr, dirty)))
-            continue;
-        gfx_t wg = gfx_sub(g, w->x, w->y, w->w, w->h);
-        paint_frame(&wg, w, w == active);
-        rect_t c = wm_client_rect(w);
-        gfx_t cg = gfx_sub(g, c.x, c.y, c.w, c.h);
-        gfx_fill(&cg, 0, 0, c.w, c.h, w->bg);
-        if (w->ops->paint)
-            w->ops->paint(w, &cg, c.w, c.h);
-    }
 }
 
 /* ---- input --------------------------------------------------------------------------- */
@@ -563,11 +661,11 @@ static void set_hot(window_t *w, int ht)
     if (w == hot_win && (!w || ht == hot_hit))
         return;
     if (hot_win)
-        invalidate_caption(hot_win);
+        invalidate_lights(hot_win);
     hot_win = w;
     hot_hit = ht;
     if (w)
-        invalidate_caption(w);
+        invalidate_lights(w);
 }
 
 static void do_resize(int x, int y)
@@ -585,19 +683,20 @@ static void do_resize(int x, int y)
         r.w = MAX(w->min_w, r.w + dx);
     if (h == HT_T || h == HT_TL || h == HT_TR) {
         int nh = MAX(w->min_h, r.h - dy);
-        r.y += r.h - nh;
-        r.h = nh;
+        int ny = MAX(TOPBAR_H, r.y + r.h - nh);
+        r.h = r.y + r.h - ny;
+        r.y = ny;
     }
     if (h == HT_B || h == HT_BL || h == HT_BR)
         r.h = MAX(w->min_h, r.h + dy);
     if (r.x == w->x && r.y == w->y && r.w == w->w && r.h == w->h)
         return;
-    ui_invalidate(frame_rect(w));
+    invalidate_outer(w);
     w->x = r.x;
     w->y = r.y;
     w->w = r.w;
     w->h = r.h;
-    ui_invalidate(frame_rect(w));
+    invalidate_outer(w);
     if (w->ops->resized)
         w->ops->resized(w);
 }
@@ -618,10 +717,12 @@ bool wm_mouse(int kind, int x, int y, int buttons, int button)
             }
             if (kind == MS_MOVE) {
                 int nx = drag.start.x + x - drag.sx, ny = drag.start.y + y - drag.sy;
-                ny = CLAMP(ny, 0, g_screen.h - TASKBAR_H - 20);
+                ny = CLAMP(ny, TOPBAR_H, g_screen.h - 40);
                 nx = CLAMP(nx, 60 - w->w, g_screen.w - 60);
-                if (nx != w->x || ny != w->y)
+                if (nx != w->x || ny != w->y) {
+                    w->flags &= ~WF_MAXIMIZED; /* a zoomed window dragged away is a normal one again */
                     wm_move(w, nx, ny);
+                }
             }
             if (kind == MS_UP && button == MOUSE_LEFT)
                 drag.mode = DRAG_NONE;
@@ -636,11 +737,11 @@ bool wm_mouse(int kind, int x, int y, int buttons, int button)
             bool inside = hit_test(w, x, y) == drag.hit;
             if (inside != drag.inside) {
                 drag.inside = inside;
-                invalidate_caption(w);
+                invalidate_lights(w);
             }
             if (kind == MS_UP && button == MOUSE_LEFT) {
                 drag.mode = DRAG_NONE;
-                invalidate_caption(w);
+                invalidate_lights(w);
                 if (inside) {
                     if (drag.hit == HT_CLOSE)
                         wm_close(w);
@@ -699,7 +800,7 @@ bool wm_mouse(int kind, int x, int y, int buttons, int button)
             if (kind == MS_DBLCLICK) {
                 if ((w->flags & WF_RESIZABLE) && !(w->flags & (WF_DIALOG | WF_NO_MAX)))
                     wm_toggle_maximize(w);
-            } else if (button == MOUSE_LEFT && !(w->flags & WF_MAXIMIZED)) {
+            } else if (button == MOUSE_LEFT) {
                 drag = (typeof(drag)){ DRAG_MOVE, w, ht, x, y, frame_rect(w), true };
             }
             break;
@@ -708,7 +809,7 @@ bool wm_mouse(int kind, int x, int y, int buttons, int button)
         case HT_MIN:
             if (button == MOUSE_LEFT && kind == MS_DOWN) {
                 drag = (typeof(drag)){ DRAG_BUTTON, w, ht, x, y, frame_rect(w), true };
-                invalidate_caption(w);
+                invalidate_lights(w);
             }
             break;
         case HT_L:

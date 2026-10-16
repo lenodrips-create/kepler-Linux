@@ -386,34 +386,37 @@ static void display_text(calc_t *c, char *out, int n)
         *comma = 0;
 }
 
+/* the Mac calculator look: a dark body, orange operators, grey function keys */
+static uint32_t key_colour(const ckey_t *k)
+{
+    const char *l = k->label;
+    if (!strcmp(l, "/") || !strcmp(l, "*") || !strcmp(l, "-") || !strcmp(l, "+") || !strcmp(l, "="))
+        return HEX(0xFF9F0A);
+    if (k->red || !strcmp(l, "sqrt") || !strcmp(l, "%") || !strcmp(l, "1/x") || !strcmp(l, "+/-"))
+        return HEX(0x5C5C60);
+    return HEX(0x7A7A7F);
+}
+
 static void calc_paint(window_t *w, gfx_t *g, int cw, int ch)
 {
     calc_t *c = w->data;
-    menubar_paint(&c->mb, g, cw);
     char text[40];
     display_text(c, text, sizeof text);
-    int dy = MENUBAR_H + 6;
-    draw_textbox(g, 8, dy, cw - 16, 24);
-    gfx_text(g, &font_ui, cw - 14 - text_width(&font_ui, text), dy + 5, text, HEX(0x000000));
+    int dy = MENUBAR_H + 4;
+    gfx_text(g, &font_big, cw - 12 - text_width(&font_big, text), dy, text, HEX(0xFFFFFF));
 
     /* memory indicator */
     int my = MENUBAR_H + 38;
-    gfx_fill(g, 8, my, BW, BH, COL_FACE);
-    draw_sunken(g, 8, my, BW, BH);
     if (c->has_mem)
-        gfx_text_centered(g, &font_ui, 8, my + 8, BW, "M", HEX(0x000000));
+        gfx_text_centered(g, &font_ui_bold, 8, my + (BH - font_ui_bold.height) / 2, BW, "M", HEX(0xFF9F0A));
 
     for (int i = 0; i < n_keys; i++) {
         ckey_t *k = &keys[i];
-        int st = 0;
-        if (c->hover == i)
-            st |= BTN_HOVER;
+        uint32_t col = key_colour(k);
         if (c->pressed == i && c->hover == i)
-            st |= BTN_PRESSED;
-        draw_button_face(g, k->x, k->y, k->w, k->h, st);
-        int off = (st & BTN_PRESSED) ? 1 : 0;
-        gfx_text_centered(g, &font_ui, k->x + off, k->y + (k->h - font_ui.height) / 2 + 1 + off, k->w, k->label,
-                          k->red ? HEX(0xE00000) : HEX(0x0000E0));
+            col = color_shade(col, 140);
+        gfx_round_rect(g, k->x, k->y, k->w, k->h, 6, col, CORNER_ALL);
+        gfx_text_centered(g, &font_ui, k->x, k->y + (k->h - font_ui.height) / 2, k->w, k->label, HEX(0xFFFFFF));
     }
 }
 
@@ -527,5 +530,8 @@ window_t *calc_open(void)
     c->mb.open = c->mb.hover = -1;
     int cw = GX + 4 * SX + 4 + BW + 8;
     int chh = GY + 4 * SY + 6;
-    return wm_create("Calculator", ICON_CALC, cw, chh, &calc_ops, c, WF_NO_MAX);
+    window_t *w = wm_create("Calculator", ICON_CALC, cw, chh, &calc_ops, c, WF_NO_MAX);
+    w->bg = HEX(0x2C2C2E);
+    wm_set_app(w, "Calculator", &c->mb, command, w);
+    return w;
 }

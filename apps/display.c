@@ -2,7 +2,7 @@
 
 #include "apps.h"
 
-static const char *const dp_tabs[] = { "Themes", "Desktop", "Screen Saver", "Appearance", "Settings" };
+static const char *const dp_tabs[] = { "General", "Desktop", "Screen Saver", "Appearance", "Displays" };
 
 static const struct {
     const char *name;
@@ -116,13 +116,13 @@ static void paint_other_tab(display_t *d, gfx_t *g, int x, int y, int w, int tab
     }
     const char *lines[3];
     if (tab == 0) {
-        lines[0] = "A theme is a background plus a set of sounds, icons";
-        lines[1] = "and other elements to help you personalize your computer.";
-        lines[2] = "Theme:  Kepler Luna (current)";
+        lines[0] = "Appearance:  Light";
+        lines[1] = "Accent colour:  Blue";
+        lines[2] = "Sidebar icon size:  Medium";
     } else {
-        lines[0] = "Windows and buttons:  Luna style";
-        lines[1] = "Color scheme:  Default (blue)";
-        lines[2] = "Font size:  Normal";
+        lines[0] = "Windows and buttons:  Big Sur style";
+        lines[1] = "Menu bar:  translucent";
+        lines[2] = "Font:  Inter (San Francisco look-alike)";
     }
     image_t *cur = desktop_render_background(desktop_background_style(), desktop_background_color(), PREV_W, PREV_H);
     monitor(g, x + (w - PREV_W) / 2, y + 30, cur);
@@ -135,8 +135,7 @@ static void dp_paint(window_t *w, gfx_t *g, int cw, int ch)
 {
     display_t *d = w->data;
     int px = 7, py = 8, pw = cw - 14, ph = ch - 52;
-    gfx_fill(g, px, py + 22, pw, ph - 22, HEX(0xFCFCFE));
-    gfx_rect(g, px, py + 21, pw, ph - 21, HEX(0x919B9C));
+    draw_tab_panel(g, px, py + TABS_H / 2, pw, ph - TABS_H / 2);
     draw_tabs(g, px, py, pw, dp_tabs, ARRAY_LEN(dp_tabs), d->tab);
     switch (d->tab) {
     case 1: paint_desktop_tab(d, g, px, py + 22, pw, cw); break;
@@ -157,7 +156,7 @@ static void dp_mouse(window_t *w, int kind, int x, int y, int button)
     display_t *d = w->data;
     rect_t c = wm_client_rect(w);
     if (kind == MS_DOWN) {
-        int t = tabs_hit(7, 8, dp_tabs, ARRAY_LEN(dp_tabs), x, y);
+        int t = tabs_hit(7, 8, c.w - 14, dp_tabs, ARRAY_LEN(dp_tabs), x, y);
         if (t >= 0) {
             d->tab = t;
             wm_invalidate_client(w);
@@ -242,6 +241,7 @@ window_t *display_open(void)
     d->items[1] = (button_t){ cw - 170, ch - 35, 75, 23, "Cancel", 2, 0 };
     d->items[2] = (button_t){ cw - 88, ch - 35, 75, 23, "Apply", 3, BTN_DISABLED };
     d->btns = (buttons_t){ d->items, 3, -1, -1 };
-    w = wm_create("Display Properties", ICON_DISPLAY, cw, ch, &dp_ops, d, WF_DIALOG);
+    w = wm_create("Desktop & Screen Saver", ICON_DISPLAY, cw, ch, &dp_ops, d, WF_DIALOG);
+    wm_set_app(w, "System Preferences", NULL, NULL, NULL);
     return w;
 }

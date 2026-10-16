@@ -210,7 +210,7 @@ static void update_title(window_t *w)
     notepad_t *np = w->data;
     char t[96];
     const char *name = np->path[0] ? strrchr(np->path, '/') + 1 : "Untitled";
-    ksnprintf(t, sizeof t, "%s - Notepad", name);
+    ksnprintf(t, sizeof t, "%s", name);
     wm_set_title(w, t);
 }
 
@@ -545,7 +545,8 @@ window_t *notepad_open(const char *path)
             strlcpy(np->path, path, sizeof np->path);
         }
     }
-    window_t *w = wm_create("Untitled - Notepad", ICON_NOTEPAD, 560, 380, &np_ops, np, WF_RESIZABLE);
+    window_t *w = wm_create("Untitled", ICON_NOTEPAD, 560, 380, &np_ops, np, WF_RESIZABLE);
+    wm_set_app(w, "Notepad", &np->mb, command, w);
     w->bg = HEX(0xFFFFFF);
     w->cursor = CURSOR_IBEAM;
     update_title(w);

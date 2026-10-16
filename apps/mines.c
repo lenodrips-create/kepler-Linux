@@ -465,6 +465,7 @@ window_t *mines_open(void)
     m->mb.n = ARRAY_LEN(bar);
     m->mb.open = m->mb.hover = -1;
     window_t *w = wm_create("Minesweeper", ICON_MINES, client_w(m), client_h(m), &mines_ops, m, WF_NO_MAX);
+    wm_set_app(w, "Minesweeper", &m->mb, command, w);
     w->bg = HEX(0xC0C0C0);
     w->min_w = 100;
     wm_set_tick(w, 250);

@@ -6,23 +6,27 @@
 #include "input.h"
 #include "video.h"
 
-/* ---- theme: Luna-like colours --------------------------------------------------- */
+/* ---- theme: Big Sur-like colours ------------------------------------------------- */
 
-#define COL_FACE      HEX(0xECE9D8)
-#define COL_FACE_LT   HEX(0xF7F6F0)
-#define COL_SHADOW    HEX(0xACA899)
-#define COL_DKSHADOW  HEX(0x716F64)
-#define COL_SELECT    HEX(0x316AC5)
-#define COL_TEXT      HEX(0x000000)
-#define COL_GRAYTEXT  HEX(0xA19F94)
+#define COL_FACE      HEX(0xECECEC) /* window background */
+#define COL_FACE_LT   HEX(0xF6F6F6)
+#define COL_SHADOW    HEX(0xC9C9C9)
+#define COL_DKSHADOW  HEX(0x8E8E8E)
+#define COL_ACCENT    HEX(0x0A64DE) /* system blue */
+#define COL_SELECT    HEX(0x0A64DE)
+#define COL_TEXT      HEX(0x1D1D1F)
+#define COL_GRAYTEXT  HEX(0x9B9B9B)
 #define COL_WINDOW    HEX(0xFFFFFF)
-#define COL_EDIT_EDGE HEX(0x7F9DB9)
-#define COL_LINK      HEX(0x0C3FAA)
-#define COL_MENU_HI   HEX(0x316AC5)
+#define COL_EDIT_EDGE HEX(0xC6C6C6)
+#define COL_LINK      HEX(0x0A64DE)
+#define COL_MENU_HI   HEX(0x2A6CF0)
+#define COL_SEP       HEX(0xD9D9D9)
 
-#define TASKBAR_H 30
-#define TITLE_H   30
-#define FRAME     4
+#define TOPBAR_H      24 /* the global menu bar */
+#define DOCK_RESERVE  78 /* kept free above the bottom edge for the dock */
+#define TITLE_H       28
+#define FRAME         0
+#define WIN_RADIUS    10
 
 /* ---- shell (shell.c) ----------------------------------------------------------- */
 
@@ -34,7 +38,14 @@ void ui_set_cursor(int cursor);
 void ui_launch(const char *cmd);
 void ui_logoff(void);
 void ui_login(void);
-void ui_power(int action); /* 0 stand by, 1 turn off, 2 restart */
+void ui_lock(void);
+void ui_power(int action); /* 0 sleep, 1 shut down, 2 restart */
+/* where windows live: between the menu bar and the dock */
+rect_t ui_work_area(void);
+/* the open window list or the active app changed: refresh the menu bar and dock */
+void shell_windows_changed(void);
+/* the pre-blurred wallpaper behind translucent surfaces */
+const image_t *ui_vibrancy(void);
 void ui_tooltip(const char *text, int x, int y);
 bool ui_overlay_active(void);
 void ui_beep(int hz, int ms);
@@ -53,14 +64,18 @@ typedef struct {
     void (*tick)(window_t *w);
     void (*close)(window_t *w);
     void (*resized)(window_t *w);
+    /* WF_UNIFIED windows: is (x, y) a control in the title/toolbar area? Elsewhere there drags the window */
+    bool (*caption_hit)(window_t *w, int x, int y);
 } window_ops_t;
 
 #define WF_RESIZABLE  0x01
 #define WF_MAXIMIZED  0x02
 #define WF_MINIMIZED  0x04
 #define WF_DIALOG     0x08 /* close button only */
-#define WF_NO_TASKBAR 0x10
+#define WF_NO_TASKBAR 0x10 /* not shown in the dock */
 #define WF_NO_MAX     0x20
+#define WF_UNIFIED    0x40 /* the client covers the title bar; the app draws its own toolbar there */
+#define WF_ALERT      0x80 /* WF_UNIFIED without traffic lights: alerts, moved by their background */
 
 struct window {
     int id;
@@ -80,6 +95,12 @@ struct window {
     int cursor;
     uint32_t created;
     bool dead; /* closed, waiting to be freed */
+    char app[32];          /* the app name shown in bold in the menu bar */
+    struct menubar *menus; /* this app's menus, shown in the menu bar while it is active */
+    void (*menu_fn)(int id, void *ctx);
+    void *menu_ctx;
+    int caption_h;  /* WF_UNIFIED: height of the app's toolbar */
+    image_t *thumb; /* snapshot shown in the dock while minimised */
 };
 
 window_t *wm_create(const char *title, int icon, int cw, int ch, const window_ops_t *ops, void *data, uint32_t flags);
@@ -102,6 +123,13 @@ void wm_set_tick(window_t *w, uint32_t ms);
 void wm_set_modal(window_t *owner, window_t *dialog);
 window_t *wm_first(void);
 window_t *wm_find(const window_ops_t *ops);
+/* app name and the menus to show in the menu bar while the window is active */
+void wm_set_app(window_t *w, const char *app, struct menubar *menus, void (*fn)(int id, void *ctx), void *ctx);
+/* the window whose app owns the menu bar right now (dialogs defer to their owner), or NULL */
+window_t *wm_menu_owner(void);
+/* the frontmost window of an app, or NULL */
+window_t *wm_app_window(const char *app);
+void wm_hide_app(const char *app);
 int wm_count(void);
 bool wm_alive(window_t *w);
 void wm_minimize_all(void);
@@ -148,17 +176,28 @@ typedef struct {
     int n;
 } menubar_entry_t;
 
-typedef struct {
+typedef struct menubar {
     const menubar_entry_t *entries;
     int n;
     int open; /* index of the open menu, -1 if none */
     int hover;
 } menubar_t;
 
-#define MENUBAR_H 20
+/* Window menus live in the global menu bar now, so the in-window bar takes no
+ * space: menubar_paint draws nothing and menubar_mouse never claims a click. */
+#define MENUBAR_H 0
 void menubar_paint(menubar_t *mb, gfx_t *g, int w);
-/* returns true if the event was in the bar */
 bool menubar_mouse(menubar_t *mb, window_t *win, int kind, int x, int y, menu_cb cb, void *ctx);
+/* open a menu bar menu at (x, y); slide() lets the caller switch menus while dragging along its bar */
+void menu_open_bar(const menu_item_t *items, int n, int x, int y, menu_cb cb, void *ctx, rect_t bar,
+                   void (*slide)(int x, int y));
+/* the open menus' rectangles (for the compositor: they are translucent) */
+int menu_rects(rect_t *out, int max);
+/* the items of the open top-level menu, or NULL */
+const menu_item_t *menu_current(void);
+/* shortcut text for menus: "Ctrl+" is drawn as the Command sign */
+int shortcut_width(const char *s);
+void shortcut_paint(gfx_t *g, int x, int y, const char *s, uint32_t c);
 
 /* ---- widgets (widgets.c) -------------------------------------------------------- */
 
@@ -177,11 +216,15 @@ void draw_progress(gfx_t *g, int x, int y, int w, int h, int pct);
 void draw_groupbox(gfx_t *g, int x, int y, int w, int h, const char *title);
 void draw_checkbox(gfx_t *g, int x, int y, bool checked, const char *label);
 void draw_focus_rect(gfx_t *g, int x, int y, int w, int h);
+/* a segmented control centred in w; the content box below starts at y + TABS_H */
+#define TABS_H 22
 void draw_tabs(gfx_t *g, int x, int y, int w, const char *const *tabs, int n, int active);
-int tabs_hit(int x, int y, const char *const *tabs, int n, int mx, int my);
+int tabs_hit(int x, int y, int w, const char *const *tabs, int n, int mx, int my);
+/* the rounded panel a tab view's pages sit in */
+void draw_tab_panel(gfx_t *g, int x, int y, int w, int h);
 void draw_statusbar(gfx_t *g, int y, int w, const char *text);
 
-#define SCROLLBAR_W 17
+#define SCROLLBAR_W 15
 typedef struct {
     int total, visible, pos;
     int drag_off; /* -1 when not dragging */
@@ -231,7 +274,7 @@ typedef void (*prompt_cb)(const char *value, void *ctx);
 void prompt_box(window_t *owner, const char *title, const char *label, const char *initial, prompt_cb cb, void *ctx);
 void run_dialog(void);
 
-/* ---- desktop, taskbar, start menu, overlays ---------------------------------------- */
+/* ---- desktop, menu bar, dock, launchers, overlays ----------------------------------- */
 
 void desktop_init(image_t *wallpaper);
 void desktop_paint(gfx_t *g, rect_t dirty);
@@ -244,34 +287,69 @@ image_t *desktop_render_background(int style, uint32_t color, int w, int h);
 int desktop_background_style(void);
 uint32_t desktop_background_color(void);
 void desktop_refresh_icons(void);
+/* Finder's menus, shown when no window is active */
+void desktop_menu_command(int id, void *ctx);
+extern menubar_t desktop_menus;
 
-void taskbar_paint(gfx_t *g, rect_t dirty);
-bool taskbar_mouse(int kind, int x, int y, int button);
-void taskbar_tick(void);
-void taskbar_changed(void);
-rect_t taskbar_start_button(void);
+/* the global menu bar (topbar.c) */
+void topbar_paint(gfx_t *g, rect_t dirty);
+bool topbar_mouse(int kind, int x, int y, int button);
+void topbar_tick(void);
+void topbar_changed(void);
+/* true when the menu bar text should be white (dark wallpaper) */
+bool topbar_dark(void);
+void topbar_background_changed(void);
 
-void startmenu_toggle(void);
-void startmenu_close(void);
-bool startmenu_is_open(void);
-void startmenu_paint(gfx_t *g);
-bool startmenu_mouse(int kind, int x, int y, int button);
-bool startmenu_key(const input_event_t *ev);
+/* the dock (dock.c) */
+rect_t dock_rect(void);
+void dock_paint(gfx_t *g, rect_t dirty);
+bool dock_mouse(int kind, int x, int y, int button);
+void dock_tick(void);
+void dock_changed(void);
 
-/* full-screen modes and the Turn Off / Log Off overlay (screens.c) */
+/* Launchpad and Spotlight (launcher.c) */
+void launchpad_toggle(void);
+void launchpad_close(void);
+bool launchpad_is_open(void);
+void launchpad_paint(gfx_t *g, rect_t dirty);
+bool launchpad_mouse(int kind, int x, int y, int button);
+void launchpad_key(const input_event_t *ev);
+void spotlight_open(void);
+void spotlight_close(void);
+bool spotlight_is_open(void);
+rect_t spotlight_rect(void);
+void spotlight_paint(gfx_t *g);
+bool spotlight_mouse(int kind, int x, int y, int button);
+void spotlight_key(const input_event_t *ev);
+void spotlight_tick(void);
+
+/* the apps the dock, Launchpad and Spotlight know about */
+typedef struct {
+    const char *name; /* also the app name its windows carry */
+    int icon;
+    const char *cmd;
+    bool in_dock;
+} app_info_t;
+extern const app_info_t g_apps[];
+extern const int g_app_count;
+const app_info_t *app_find(const char *name);
+
+/* full-screen modes and the shut down / log out alert (screens.c) */
 void screens_boot(void (*work)(void (*progress)(int pct)));
-void screens_welcome_paint(gfx_t *g, rect_t dirty);
-bool screens_welcome_mouse(int kind, int x, int y, int button);
-void screens_welcome_key(const input_event_t *ev);
-void screens_welcome_tick(void);
-void screens_welcome_reset(void);
-void overlay_open(int kind); /* 0 turn off, 1 log off */
+void screens_login_paint(gfx_t *g, rect_t dirty);
+bool screens_login_mouse(int kind, int x, int y, int button);
+void screens_login_key(const input_event_t *ev);
+void screens_login_tick(void);
+/* locked: only the signed-in user, windows stay open */
+void screens_login_reset(bool locked);
+void overlay_open(int kind); /* 0 shut down, 1 log out, 2 restart */
 bool overlay_is_open(void);
+rect_t overlay_rect(void);
 void overlay_paint(gfx_t *g, rect_t dirty);
 bool overlay_mouse(int kind, int x, int y, int button);
 void overlay_key(const input_event_t *ev);
 void overlay_tick(void);
 void screens_goodbye(int action);
 
-/* user name shown in the start menu and on the welcome screen */
+/* user name shown in the menu bar and on the sign-in screen */
 extern char g_user_name[32];

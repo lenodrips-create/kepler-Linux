@@ -5,11 +5,10 @@ this is a newly based os made by Lennon Helman and with the help of claude code
 ![KeplerOS desktop](docs/screenshots/desktop.png)
 
 KeplerOS is a small 32-bit x86 operating system written in C. It boots
-straight into a graphical desktop inspired by Windows XP's Luna look, with
-the green-globe photo in `assets/stockwallpaper` as its wallpaper.
-Everything on screen is drawn by the kernel itself: there is no libc, no
-bootloader code of its own (it is a Multiboot kernel) and no external
-graphics or font libraries.
+straight into a graphical desktop styled after macOS Big Sur, with the
+green-globe photo in `assets/stockwallpaper` as its wallpaper. Everything on
+screen is drawn by the kernel itself: there is no libc, no bootloader code of
+its own (it is a Multiboot kernel) and no external graphics or font libraries.
 
 ## What's inside
 
@@ -19,26 +18,33 @@ graphics or font libraries.
   framebuffer at 1280x800x32, or a GRUB-provided framebuffer, and the PC
   speaker for beeps.
 - **Graphics:** a dirty-rectangle compositor, antialiased rounded shapes,
-  gradients, pre-rendered antialiased fonts, vector icons rasterised at boot
-  with 4x4 supersampling, a baseline **JPEG decoder** and bicubic scaling
-  for the wallpaper.
-- **Shell:** boot splash, welcome/login screen, desktop icons (drag,
-  rename, delete, right-click menus), a taskbar with a Start button, quick
-  launch, window buttons and a clock, a two-column Start menu with All
-  Programs, a window manager (move, resize, minimise, maximise, modal
-  dialogs), Turn Off / Log Off dialogs with the grayscale fade.
-- **Apps:** Notepad, Calculator, Command Prompt (dir, cd, type, tree, echo
-  with `>` redirection, calc, neofetch, tasklist...), My Computer / Explorer,
-  Picture Viewer, Paint, Minesweeper, Task Manager with live CPU and memory
-  graphs, Display Properties (switch backgrounds), System Properties, Run
-  and About.
-- **Files:** an in-memory file system (shown as drive C:) with a few
-  starter documents. Files you create live until you power off.
+  soft drop shadows, box blur for translucent "vibrancy" surfaces (the menu
+  bar, dock, menus and Spotlight blur whatever is behind them), pre-rendered
+  antialiased fonts (Inter, standing in for San Francisco), vector icons
+  rasterised with 4x4 supersampling, a baseline **JPEG decoder** and bicubic
+  scaling for the wallpaper.
+- **Sign-in screen:** the wallpaper, frosted, with a big clock and date,
+  account pictures, a password field (it shakes on a wrong password and
+  then shows the hint), and Sleep / Restart / Shut Down. Lock Screen and
+  waking from sleep come back to it with your windows still open.
+- **Desktop:** a translucent menu bar with the Kepler menu, the frontmost
+  app's name and menus, status icons and the clock; a dock with running-app
+  dots, bouncing launches, minimised-window thumbnails and the Trash; desktop
+  icons down the right edge; Launchpad; Spotlight (apps, files, or any
+  command); Big Sur windows with traffic lights, rounded corners and
+  shadows; macOS-style alerts and shut down / restart / log out prompts.
+- **Apps:** Finder (sidebar, toolbar, icon view), Notepad, Calculator,
+  Terminal (dir, cd, type, tree, echo with `>` redirection, calc, neofetch,
+  tasklist...), Paint, Preview, Minesweeper, Activity Monitor with live CPU
+  and memory graphs, System Preferences (desktop background), System
+  Information and About This Kepler.
+- **Files:** an in-memory file system (Kepler HD) with a few starter
+  documents. Files you create live until you power off.
 
 | | |
 | --- | --- |
-| ![Welcome screen](docs/screenshots/welcome.png) | ![Start menu](docs/screenshots/start-menu.png) |
-| ![My Computer](docs/screenshots/my-computer.png) | ![Turn off computer](docs/screenshots/turn-off.png) |
+| ![Sign-in screen](docs/screenshots/login.png) | ![Launchpad](docs/screenshots/launchpad.png) |
+| ![Spotlight](docs/screenshots/spotlight.png) | ![Shut down](docs/screenshots/shut-down.png) |
 
 ## Build and run
 
@@ -51,11 +57,16 @@ make run        # boots it in QEMU
 make iso        # optional: a GRUB CD image (needs grub-mkrescue + xorriso)
 ```
 
-Click your user name on the welcome screen (or press Enter) to log in.
+Pick **Kepler** on the sign-in screen (or press Enter) and type the password
+**`kepler`**. **Guest** signs in without one.
 
-Handy keys: **Win** opens Start, **Ctrl+Alt+Del** opens Task Manager,
-**Alt+Tab** cycles windows, **Alt+F4** closes the active window,
-**Win+D** shows the desktop, **Win+E** opens My Computer and **Win+R** opens Run.
+The Windows key plays the Command key: tapping it opens **Launchpad**,
+**Win+Space** (or Win+R) opens **Spotlight**, **Win+Q/W** closes the window,
+**Win+M** minimises it, **Win+H** hides the app, **Win+L** locks the screen,
+**Win+D** shows the desktop and **Win+E** opens a Finder window.
+**Ctrl+Alt+Del** opens Activity Monitor, **Alt+Tab** cycles windows and
+**Alt+F4** closes the active window. Menu shortcuts written `Ctrl+S` are
+shown as Command-S.
 
 ## Layout
 
@@ -65,7 +76,7 @@ Handy keys: **Win** opens Start, **Ctrl+Alt+Del** opens Task Manager,
 | `kernel/` | CPU setup, heap, timer, console, clock, PCI, power, `kmain` |
 | `drivers/` | keyboard, mouse and framebuffer |
 | `gfx/` | drawing, fonts, icons, cursors, JPEG decoder |
-| `ui/` | shell main loop, window manager, desktop, taskbar, Start menu, menus, widgets, dialogs, splash/welcome |
+| `ui/` | shell main loop and compositor, window manager, desktop, menu bar, dock, Launchpad and Spotlight, menus, widgets, alerts, boot and sign-in screens |
 | `apps/` | the applications |
 | `fs/` | the RAM file system |
 | `assets/` | the wallpaper, linked into the kernel image |
@@ -77,6 +88,6 @@ Handy keys: **Win** opens Start, **Ctrl+Alt+Del** opens Task Manager,
 - Fonts are rasterised from DejaVu Sans / Sans Mono (Bitstream Vera
   license), Liberation Sans (SIL OFL 1.1) and Inter (SIL OFL 1.1).
 - The wallpaper is the stock image supplied by the project owner.
-- The look is inspired by Windows XP. KeplerOS is not affiliated with
-  Microsoft and uses no Microsoft artwork; its icons and logo are drawn in
+- The look is inspired by macOS Big Sur. KeplerOS is not affiliated with
+  Apple and uses no Apple artwork or fonts; its icons and logo are drawn in
   code.
