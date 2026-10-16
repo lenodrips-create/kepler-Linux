@@ -18,6 +18,7 @@ const app_info_t g_apps[] = {
     { "Activity Monitor", ICON_TASKMGR, "taskmgr", true },
     { "System Preferences", ICON_DISPLAY, "display", true },
     { "System Information", ICON_SYSINFO, "sysprops", false },
+    { "Welcome", ICON_INFO, "welcome", false },
 };
 const int g_app_count = ARRAY_LEN(g_apps);
 

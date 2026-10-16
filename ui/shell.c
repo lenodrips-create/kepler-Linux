@@ -240,6 +240,8 @@ void ui_launch(const char *cmd)
 #else
         browser_open(*arg ? arg : NULL);
 #endif
+    else if (!strcmp(name, "welcome"))
+        welcome_open();
     else if (!strcmp(name, "brady") || !strcmp(name, "bradybuddy"))
         brady_open();
     else if (!strcmp(name, "calc") || !strcmp(name, "calculator"))
@@ -304,6 +306,11 @@ void ui_login(void)
     signed_in = true;
     ui_invalidate_all();
     shell_windows_changed();
+    /* the Welcome screen, once per session, unless it was switched off */
+    static bool welcomed;
+    if (!welcomed && welcome_at_startup())
+        welcome_open();
+    welcomed = true;
 }
 
 void ui_lock(void)

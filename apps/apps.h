@@ -15,3 +15,5 @@ window_t *viewer_open(const char *path);
 window_t *sysprops_open(void);
 window_t *browser_open(const char *url); /* NULL for the start page */
 window_t *brady_open(void);              /* BradyBuddy, the terminal tutor */
+window_t *welcome_open(void);            /* the Welcome screen shown after signing in */
+bool welcome_at_startup(void);

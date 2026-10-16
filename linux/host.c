@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/sysinfo.h>
 #include <time.h>
 #include <unistd.h>
@@ -266,4 +267,43 @@ void host_sysinfo_init(void)
         g_sys.cpu_mhz = (uint32_t)mhz;
     }
     ksrand((uint32_t)rdtsc() ^ (uint32_t)time(NULL));
+}
+
+/* ---- settings: small yes/no choices kept in ~/.config/kepleros ---------------------------------------- */
+
+static void flag_path(const char *name, char *out, size_t n)
+{
+    const char *home = getenv("HOME");
+    snprintf(out, n, "%s/.config/kepleros/%s", home ? home : "/tmp", name);
+}
+
+bool host_get_flag(const char *name, bool def)
+{
+    char path[256];
+    flag_path(name, path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return def;
+    int c = fgetc(f);
+    fclose(f);
+    return c == EOF ? def : c == '1';
+}
+
+void host_set_flag(const char *name, bool on)
+{
+    char path[256];
+    flag_path(name, path, sizeof path);
+    char dir[256];
+    strlcpy(dir, path, sizeof dir);
+    *strrchr(dir, '/') = 0;
+    *strrchr(dir, '/') = 0;
+    mkdir(dir, 0755); /* ~/.config */
+    strlcpy(dir, path, sizeof dir);
+    *strrchr(dir, '/') = 0;
+    mkdir(dir, 0755); /* ~/.config/kepleros */
+    FILE *f = fopen(path, "w");
+    if (f) {
+        fputc(on ? '1' : '0', f);
+        fclose(f);
+    }
 }

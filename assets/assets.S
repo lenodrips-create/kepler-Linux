@@ -43,6 +43,13 @@ brady_icon_argb:
 brady_240_argb:
     .incbin "assets/brady-240.bgra"
 .balign 16
+.global welcome_bg_argb
+welcome_bg_argb:
+    .incbin "assets/welcome-bg.bgra"
+.global welcome_icons_a8
+welcome_icons_a8:
+    .incbin "assets/welcome-icons.a8"
+.balign 16
 .global notepad_icon_argb
 notepad_icon_argb:
     .incbin "assets/notepad-icon.bgra"

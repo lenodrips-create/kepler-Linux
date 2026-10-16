@@ -64,6 +64,8 @@ void host_set_cursor(int cursor);
 void host_paint_popups(gfx_t *g, rect_t dirty); /* other programs' menus and tooltips */
 void host_beep(void);
 void host_launch(const char *program, const char *arg); /* start an installed program, e.g. Kepler */
+bool host_get_flag(const char *name, bool def);         /* a yes/no setting kept between sessions */
+void host_set_flag(const char *name, bool on);
 void shell_main(void);
 #endif
 
