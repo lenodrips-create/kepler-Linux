@@ -171,20 +171,31 @@ start() {
 }
 
 neofetch() {
-    local g=$'\e[32m' y=$'\e[33m' w=$'\e[97m' c=$'\e[36m' x=$'\e[0m'
+    local g=$'\e[32m' w=$'\e[97m' c=$'\e[36m' x=$'\e[0m'
     local up mem cpu res
     up=$(uptime -p 2>/dev/null | sed 's/^up //')
     mem=$(free -m | awk '/^Mem:/ { print $3 "MB / " $2 "MB" }')
     cpu=$(awk -F': ' '/model name/ { print $2; exit }' /proc/cpuinfo)
     res=$(xrandr 2>/dev/null | awk '/\*/ { print $1; exit }')
-    local art=(
-        "            .-~~~-."
-        "         .'\`       \`'."
-        "   .~~~~/    K E P    \\~~~~."
-        "  (    |     L E R     |    )"
-        "   '~~~~\\      O S     /~~~~'"
-        "         '.         .'"
-        "           '-.___.-'     *")
+    local art
+    mapfile -t art <<'ART'
+                                                          .
+       .                                              .
+                                   :,:,,,
+                +++++++++#####*+==::::,:::,,:                .
+             ++++%@@@%%%%%%%+:++++=-==,:::::-,-:    .
+           ++* @@%%%%+=:...,-:=*++**+++++===+++=-++*+
+          ++* @@%%%+....  ::-::-=+*****+*****+++-.%@@%+++
+           +* @@%%%....  =:::+#*==--:----======+-..,=%%@@#++
+            ++#@%%%*...  +***+:+==-:-----------::.....=%%%@%+++
+             +++%@%%%=...=+****+++----==-------:,..  ...*%%%@#++
+                ++#@@%%*=,:++*#**###*+---=++**=-,..  ....%%%@@ *+
+                   +++%@@%%++=:==+**######**+=-,..  ....+%%%@@ *++.
+                       +*+#*+@%%#++**---+++=-,......:=+%%%%@@ *++
+                            +-:-##*+#@@@%%%%%%%%%%%%%%%@@@%++++
+                               ....----:,:::#######+++++++++
+                                   ......
+ART
     local info=(
         "${g}$(id -un)${x}@${g}$(hostname)"
         "-----------------"
@@ -197,10 +208,22 @@ neofetch() {
         "${c}CPU${x}: ${cpu:0:38}"
         "${c}Memory${x}: ${mem}")
     echo
-    for i in "${!info[@]}"; do
-        printf '%s%-31s%s %s%s\n' "$g" "${art[i]}" "$x" "${info[i]}" "$x"
-    done
-    printf '                                '
+    local aw=0 l
+    for l in "${art[@]}"; do ((${#l} > aw)) && aw=${#l}; done
+    if (($(tput cols 2>/dev/null || echo 80) >= aw + 52)); then
+        # side by side, the information level with the planet
+        local off=$(((${#art[@]} - ${#info[@]}) / 2)) i
+        for i in "${!art[@]}"; do
+            l=""
+            ((i >= off)) && l=${info[i - off]:-}
+            printf '%s%-*s%s  %s%s\n' "$w" "$aw" "${art[i]}" "$x" "$l" "$x"
+        done
+    else
+        printf '%s%s%s\n' "$w" "$(printf '%s\n' "${art[@]}")" "$x"
+        echo
+        for i in "${!info[@]}"; do printf '  %s%s\n' "${info[i]}" "$x"; done
+    fi
+    printf '  '
     for i in 0 1 2 3 4 5 6 7; do printf '\e[4%dm   ' $i; done
     printf '%s\n\n' "$x"
 }

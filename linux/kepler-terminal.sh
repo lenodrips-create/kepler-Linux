@@ -4,7 +4,7 @@
 cd "$HOME"
 export KEPLER_TERMINAL=1
 exec xterm -title Terminal -class Terminal \
-    -fa "DejaVu Sans Mono" -fs 11 -geometry 100x36 \
+    -fa "DejaVu Sans Mono" -fs 11 -geometry 120x36 \
     -bg "#0c0c0c" -fg "#e6e6e6" -cr "#40e66e" -bc \
     -sl 5000 +sb -si -sk \
     -xrm "XTerm*selectToClipboard: true" -xrm "XTerm*metaSendsEscape: true" \
