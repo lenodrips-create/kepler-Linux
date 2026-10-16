@@ -3,6 +3,10 @@
 # KeplerOS commands added (/etc/kepleros/commands.sh).
 cd "$HOME"
 export KEPLER_TERMINAL=1
+# BradyBuddy opens the Terminal with a command ready to run: --suggest=COMMAND
+case "$1" in
+--suggest=*) export KEPLER_SUGGEST="${1#--suggest=}"; shift ;;
+esac
 exec xterm -title Terminal -class Terminal \
     -fa "DejaVu Sans Mono" -fs 11 -geometry 120x36 \
     -bg "#0c0c0c" -fg "#e6e6e6" -cr "#40e66e" -bc \

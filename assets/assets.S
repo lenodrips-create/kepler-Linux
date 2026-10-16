@@ -35,6 +35,14 @@ finder_icon_argb:
 terminal_icon_argb:
     .incbin "assets/terminal-icon.bgra"
 .balign 16
+.global brady_icon_argb
+brady_icon_argb:
+    .incbin "assets/brady-icon.bgra"
+.balign 16
+.global brady_240_argb
+brady_240_argb:
+    .incbin "assets/brady-240.bgra"
+.balign 16
 .global notepad_icon_argb
 notepad_icon_argb:
     .incbin "assets/notepad-icon.bgra"

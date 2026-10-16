@@ -233,3 +233,16 @@ if [ -n "$KEPLER_TERMINAL" ] && [ -z "$_KEPLER_GREETED" ]; then
     export _KEPLER_GREETED=1
     printf 'KeplerOS [Version 1.0.2600]\n(C) Copyright 2026 The KeplerOS Project.\nType help for the KeplerOS commands. Every Linux command works too.\n\n'
 fi
+
+# a command BradyBuddy suggested: one press of Up brings it back
+if [ -n "$KEPLER_SUGGEST" ]; then
+    _kepler_suggest() {
+        history -s "$KEPLER_SUGGEST"
+        printf '\e[35mBradyBuddy:\e[0m press \e[1mUp\e[0m, then \e[1mEnter\e[0m to run:  \e[32m%s\e[0m\n\n' "$KEPLER_SUGGEST"
+        unset KEPLER_SUGGEST
+        PROMPT_COMMAND=${_kepler_pc}
+        unset -f _kepler_suggest
+    }
+    _kepler_pc=$PROMPT_COMMAND
+    PROMPT_COMMAND=_kepler_suggest
+fi
