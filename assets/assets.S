@@ -29,4 +29,26 @@ kepler_logo_jpg_end:
 finder_icon_argb:
     .incbin "assets/finder-icon.bgra"
 
+/* dock app icons supplied by the project owner, ARGB, square */
+.balign 16
+.global terminal_icon_argb
+terminal_icon_argb:
+    .incbin "assets/terminal-icon.bgra"
+.balign 16
+.global notepad_icon_argb
+notepad_icon_argb:
+    .incbin "assets/notepad-icon.bgra"
+.balign 16
+.global calc_icon_argb
+calc_icon_argb:
+    .incbin "assets/calc-icon.bgra"
+.balign 16
+.global activity_icon_argb
+activity_icon_argb:
+    .incbin "assets/activity-icon.bgra"
+.balign 16
+.global settings_icon_argb
+settings_icon_argb:
+    .incbin "assets/settings-icon.bgra"
+
 .section .note.GNU-stack,"",@progbits

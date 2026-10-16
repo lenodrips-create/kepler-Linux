@@ -57,7 +57,7 @@ build/%.o: %.S
 	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 # .incbin isn't seen by -MMD
-build/assets/assets.o: assets/stockwallpaper assets/kepler-icon.jpg assets/kepler-logo.jpg assets/finder-icon.bgra
+build/assets/assets.o: assets/stockwallpaper assets/kepler-icon.jpg assets/kepler-logo.jpg assets/finder-icon.bgra $(wildcard assets/*-icon.bgra)
 
 # ---- KeplerOS on Linux: the shell as an X11 program and window manager ----------
 # (linux/build-iso.sh turns it and Ubuntu into the bootable image)
@@ -93,7 +93,7 @@ build/linux/%.o: %.c
 	@echo "  CC  $< (linux)"
 	@$(HOST_CC) $(HOST_CFLAGS) -MMD -MP -c $< -o $@
 
-build/linux/assets/assets.o: assets/assets.S assets/stockwallpaper assets/kepler-icon.jpg assets/kepler-logo.jpg assets/finder-icon.bgra
+build/linux/assets/assets.o: assets/assets.S assets/stockwallpaper assets/kepler-icon.jpg assets/kepler-logo.jpg assets/finder-icon.bgra $(wildcard assets/*-icon.bgra)
 	@mkdir -p $(dir $@)
 	@$(HOST_CC) -c $< -o $@
 
