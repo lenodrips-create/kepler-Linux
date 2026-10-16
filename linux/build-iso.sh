@@ -34,6 +34,8 @@ chroot "$ROOT" systemctl mask casper-md5check.service >/dev/null 2>&1 || true
 rm -f "$ROOT"/etc/update-motd.d/* 2>/dev/null || true
 touch "$ROOT/home/kepler/.hushlogin"
 chroot "$ROOT" usermod -aG dialout kepler   # lets "kepdebug" boots log to the serial port
+# compressed swap in RAM: a browser on a 2 GB machine gets room to breathe
+printf '[zram0]\nzram-size = ram\ncompression-algorithm = zstd\nswap-priority = 100\n' > "$ROOT/etc/systemd/zram-generator.conf"
 
 # the boot splash: the Kepler planet on black
 install -D -m644 -t "$ROOT/usr/share/plymouth/themes/kepleros" \
